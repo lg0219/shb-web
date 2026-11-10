@@ -1,0 +1,15 @@
+# shb-web 运行时/本地文件（不进 git）
+venv/
+__pycache__/
+*.pyc
+*.log
+*.bak
+*.bak-*
+*.before-restore.*
+*.wrong.*
+permissions.json
+aitable_state.json
+.trash-*/
+backup/
+*.bak.*
+*.bak2*

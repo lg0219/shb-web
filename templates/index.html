@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SHB 数据</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; background:#f0f2f5; color:#2d3436; height:100vh; overflow:hidden; }
+.app { display:flex; height:100vh; }
+
+/* ── 侧边栏 ── */
+.sidebar { width:230px; flex:0 0 230px; background:#15324e; color:#c8d6e5; display:flex; flex-direction:column; transition:margin-left .18s ease; }
+.sidebar.hidden { margin-left:-230px; }
+.side-head { height:54px; display:flex; align-items:center; padding:0 18px; font-size:16px; font-weight:700; color:#fff; border-bottom:1px solid #1f4267; }
+.menu { flex:1; overflow-y:auto; padding:8px 0; }
+.group-title { display:flex; align-items:center; justify-content:space-between; font-size:15px; font-weight:600; color:#e6eef7; padding:10px 18px 6px; cursor:pointer; user-select:none; }
+.gicon { display:inline-block; width:20px; margin-right:6px; text-align:center; }
+.group-title:hover { color:#fff; }
+.group-title .caret { font-size:11px; color:#8fa8c4; transition:transform .15s; }
+.group.collapsed .group-title .caret { transform:rotate(-90deg); }
+.group.collapsed .group-items { display:none; }
+.item { display:flex; align-items:center; gap:8px; padding:9px 18px 9px 41px; font-size:14px; color:#c8d6e5; cursor:pointer; border-left:3px solid transparent; white-space:nowrap; }
+.item:hover { background:#1b3d5e; color:#fff; }
+.item.active { background:#0d6efd; color:#fff; border-left-color:#7fd1ff; }
+.side-foot { height:54px; display:flex; align-items:center; gap:8px; padding:0 16px; border-top:1px solid #1f4267; font-size:13px; }
+.avatar { width:26px; height:26px; border-radius:50%; background:#0d6efd; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; }
+.uname { flex:1; color:#e6eef7; }
+.logout { color:#ff9a9a; text-decoration:none; font-size:12px; }
+
+/* ── 收起后的细边 ── */
+.edge { display:none; width:16px; flex:0 0 16px; background:#15324e; color:#c8d6e5; align-items:center; justify-content:center; cursor:pointer; font-size:11px; }
+.edge:hover { background:#0d6efd; color:#fff; }
+.edge.show { display:flex; }
+
+/* ── 主区 ── */
+.main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.topbar { height:52px; background:#fff; border-bottom:1px solid #e3e8ee; display:flex; align-items:center; gap:14px; padding:0 18px; }
+.icon-btn { width:34px; height:34px; border:1px solid #dfe6e9; background:#fff; border-radius:7px; cursor:pointer; font-size:16px; }
+.crumb { font-size:15px; font-weight:600; color:#15324e; }
+.wp-tab { padding:5px 14px; border:1px solid #dfe6e9; background:#fff; border-radius:14px; font-size:13px; color:#6b7280; cursor:pointer; }
+.wp-tab:hover { border-color:#0d6efd; color:#0d6efd; }
+.wp-tab.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
+
+/* ── 查询区 ── */
+.query-box { background:#fff; border-bottom:1px solid #e3e8ee; padding:14px 18px; }
+.form-row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+.form-group { display:flex; flex-direction:column; gap:6px; }
+.form-group label { font-size:12px; color:#6b7280; font-weight:500; }
+.form-group input, .form-group select { padding:8px 12px; border:1px solid #dfe6e9; border-radius:6px; font-size:14px; outline:none; min-width:160px; }
+.btn-query { padding:8px 28px; background:#0d6efd; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
+.btn-export { padding:8px 28px; background:#12b886; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
+.btn-save { padding:8px 28px; background:#f77f00; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
+.chip { padding:4px 12px; border:1px solid #dfe6e9; border-radius:14px; background:#fff; cursor:pointer; font-size:13px; color:#6b7280; }
+.chip.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
+.loading { display:none; align-items:center; gap:8px; color:#6b7280; margin-top:8px; }
+.spinner { width:16px; height:16px; border:2px solid #dfe6e9; border-top-color:#0d6efd; border-radius:50%; animation:spin .6s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.error { color:#d63031; padding:12px 16px; background:#ffeaa7; border-radius:8px; margin-top:12px; display:none; }
+
+/* ── 数据区 ── */
+.body { flex:1; overflow:auto; padding:16px 18px; }
+.table-wrap { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); overflow:hidden; }
+.table-scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead { background:#f7f9fc; }
+th { padding:10px 12px; text-align:left; font-weight:600; color:#6b7280; border-bottom:2px solid #e3e8ee; white-space:nowrap; }
+td { padding:8px 12px; text-align:left; border-bottom:1px solid #f1f2f6; }
+tr:hover td { background:#f7f9fc; }
+.empty { padding:40px; text-align:center; color:#b2bec3; }
+.pagination { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#f8f9fa; border-top:1px solid #dfe6e9; }
+.page-btn { padding:4px 12px; border:1px solid #dfe6e9; border-radius:4px; background:#fff; cursor:pointer; font-size:13px; }
+.page-btn:disabled { opacity:.4; cursor:default; }
+.col-text { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.col-wrap { max-width:560px; white-space:normal; word-break:break-word; line-height:1.5; vertical-align:top; }
+.qmark { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; background:#dfe6e9; color:#6b7280; font-size:11px; font-weight:700; cursor:help; margin-left:5px; vertical-align:middle; }
+.qmark:hover { background:#0d6efd; color:#fff; }
+.tip-pop { position:fixed; background:#fff; border:1px solid #dfe6e9; box-shadow:0 3px 10px rgba(0,0,0,.14); border-radius:6px; padding:8px 10px; font-size:12px; color:#2d3436; z-index:99999; max-width:280px; line-height:1.7; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside id="sidebar" class="sidebar">
+    <div class="side-head">🦞 SHB 数据</div>
+    <nav class="menu" id="menu"></nav>
+    <div class="side-foot">
+      <span class="avatar">{{ (current_user or '?')[0] }}</span>
+      <span class="uname">{{ current_user }}</span>
+      <a href="/shb/logout" class="logout">退出</a>
+    </div>
+  </aside>
+  <div id="edge" class="edge" title="展开侧边栏">▶</div>
+
+  <main class="main">
+    <div class="topbar">
+      <button id="toggleBtn" class="icon-btn" title="收起侧边栏">☰</button>
+      <div class="crumb" id="pageTitle"></div>
+      <div id="wpTabs" style="display:none;align-items:center;gap:6px">
+        <button class="wp-tab active" data-mode="plan" onclick="setWeeklyMode('plan')">周计划</button>
+        <button class="wp-tab" data-mode="summary" onclick="setWeeklyMode('summary')">周总结</button>
+      </div>
+    </div>
+
+    <div class="query-box" id="query-box">
+      <div class="form-row" id="form-row">
+        <div class="form-group">
+          <label>关键字</label>
+          <input type="text" id="keyword" placeholder="工单编号 / 客户 / 字段值">
+        </div>
+        <div class="form-group">
+          <label>创建时间从</label>
+          <input type="date" id="date_begin">
+        </div>
+        <div class="form-group">
+          <label>创建时间至</label>
+          <input type="date" id="date_end">
+        </div>
+        <div class="form-group">
+          <label>下拉选择</label>
+          <select id="select_val">
+            <option value="">全部</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+          </select>
+        </div>
+        <button class="btn-query" onclick="doSearch()">🔍 查询</button>
+        <button class="btn-export" id="export-btn" onclick="doExport()" style="display:none">📥 导出 CSV</button>
+      </div>
+      <div class="form-row" id="form-row-custom" style="display:none"></div>
+      <div id="person-bar" style="display:none;margin-top:10px"></div>
+      <div id="job-status" style="display:none;margin-top:10px;font-size:13px;color:#0d6efd"></div>
+      <div id="audit-filter" style="display:none">
+        <div class="form-row">
+          <div class="form-group">
+            <label>状态筛选</label>
+            <select id="audit_status_filter" onchange="fetchAudit()">
+              <option value="">全部</option>
+              <option value="done">成功</option>
+              <option value="failed">失败</option>
+              <option value="verify_failed">回查不一致</option>
+              <option value="executing">执行中</option>
+            </select>
+          </div>
+          <button class="btn-query" onclick="fetchAudit()">🔍 刷新日志</button>
+        </div>
+      </div>
+      <div class="loading" id="loading"><div class="spinner"></div><span>查询中...</span></div>
+      <div class="error" id="error"></div>
+    </div>
+
+    <div class="body">
+      <div class="table-wrap">
+        <div class="table-scroll" id="table-container"><div class="empty">输入条件后点击「查询」</div></div>
+        <div class="pagination" id="pagination" style="display:none">
+          <div><span id="page-info"></span></div>
+          <div>
+            <button class="page-btn" id="prev-btn" onclick="goPage(-1)">◀ 上一页</button>
+            <button class="page-btn" id="next-btn" onclick="goPage(1)">下一页 ▶</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script>
+let currentPage = 1, currentTab = 'station', totalPages = 1;
+let isAuditTab = false;
+let isSyncTab = false;
+let isSyncLogTab = false;
+let isIdTab = false;
+let isUsersAccountTab = false;
+let weeklyMode = 'plan';   // 周计划 / 周总结
+let allTabs = {{ all_tabs | tojson }};
+let userTabs = {{ tabs | tojson }};
+let tabTitles = {{ tab_titles | tojson }};
+let isAdmin = {{ 'true' if current_user == 'admin' else 'false' }};
+if (userTabs && userTabs.length) currentTab = (userTabs.indexOf('bk_overview') >= 0 ? 'bk_overview' : userTabs[0]);
+
+// ── 侧边栏菜单（分组）──
+const AUDIT_KEY = '__audit__';
+const GROUP_ORDER = ['概览', '工单', '客户', '在线报表', '本地报表', '系统'];
+// 分组标题图标（只加在分组上，Tab 项不加）
+const GROUP_ICONS = {'概览': '📊', '工单': '🧾', '客户': '🤝', '在线报表': '🌐', '本地报表': '📈', '系统': '⚙️'};
+function groupOf(key) {
+  if (key.slice(0, 3) === 'ol:') return '在线报表';              // 在线报表（云端实时）
+  if (key === 'bk_overview') return '概览';
+  if (key.slice(0, 3) === 'bk:') return '工单';
+  if (key.slice(0, 11) === 'bkent:paas:') return '工单';   // 问题工单
+  if (key.slice(0, 6) === 'bkent:') return '客户';          // 客户/联系人/地址/设备
+  if (key === 'fieldmap' || key === 'sync' || key === 'synclog') return '系统';  // 数据字典/同步中心/同步日志
+  if (key === 'identity') return '系统';                    // 身份管理
+  if (key === 'users-account') return '系统';               // 账号管理
+  if (key === 'users') return '系统';                       // SHB用户
+  if (key === 'station') return '客户';                     // 站点信息
+  return '本地报表';                                        // 行程单/项目进度/项目进度2
+}
+const DEFAULT_COLLAPSED = {'概览': true, '工单': true, '客户': true, '在线报表': false, '本地报表': true, '系统': true};
+const COLLAPSED = Object.assign({}, DEFAULT_COLLAPSED);   // 分组折叠状态（会话内记忆）
+function renderMenu() {
+  const menu = document.getElementById('menu');
+  menu.innerHTML = '';
+  const groups = {};
+  userTabs.forEach(t => { const g = groupOf(t); (groups[g] = groups[g] || []).push(t); });
+  if (isAdmin) (groups['系统'] = groups['系统'] || []).push(AUDIT_KEY);
+  GROUP_ORDER.forEach(g => {
+    const list = groups[g];
+    if (!list || !list.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'group' + (COLLAPSED[g] ? ' collapsed' : '');
+    const gt = document.createElement('div');
+    gt.className = 'group-title';
+    gt.innerHTML = '<span class="gname">' + (GROUP_ICONS[g] ? '<span class="gicon">' + GROUP_ICONS[g] + '</span>' : '') + esc(g) + '</span><span class="caret">▾</span>';
+    gt.onclick = () => { COLLAPSED[g] = !COLLAPSED[g]; wrap.classList.toggle('collapsed'); };
+    wrap.appendChild(gt);
+    const box = document.createElement('div');
+    box.className = 'group-items';
+    list.forEach(t => {
+      const it = document.createElement('div');
+      const isSync = (t === 'sync'), isLog = (t === 'synclog'), isId = (t === 'identity'), isUA = (t === 'users-account');
+      const active = (t === AUDIT_KEY) ? isAuditTab
+                   : isSync ? isSyncTab
+                   : isLog ? isSyncLogTab
+                   : isId ? isIdTab
+                   : isUA ? isUsersAccountTab
+                   : (!isAuditTab && !isSyncTab && !isSyncLogTab && !isIdTab && !isUsersAccountTab && t === currentTab);
+      it.className = 'item' + (active ? ' active' : '');
+      it.textContent = (t === AUDIT_KEY) ? '操作日志' : (tabTitles[t] || t);
+      it.onclick = () => (t === AUDIT_KEY ? switchToAudit()
+                        : isSync ? switchToSync()
+                        : isLog ? switchToSyncLog()
+                        : isId ? switchToIdentity()
+                        : isUA ? switchToUsersAccount()
+                        : switchToTab(t));
+      box.appendChild(it);
+    });
+    wrap.appendChild(box);
+    menu.appendChild(wrap);
+  });
+  document.getElementById('pageTitle').textContent = isAuditTab ? '操作日志' : (isSyncTab ? '同步中心' : (isSyncLogTab ? '同步日志' : (isIdTab ? '身份管理' : (isUsersAccountTab ? '账号管理' : (tabTitles[currentTab] || currentTab)))));
+  const _wp = document.getElementById('wpTabs');
+  if (_wp) {
+    const on = ((currentTab === 'weekly-plan' || currentTab === 'ol:weekly-plan') && !isAuditTab && !isSyncTab && !isSyncLogTab && !isIdTab && !isUsersAccountTab);
+    _wp.style.display = on ? 'flex' : 'none';
+    if (on) _wp.querySelectorAll('.wp-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === weeklyMode));
+  }
+}
+
+// 周计划 / 周总结 切换
+function setWeeklyMode(m) {
+  weeklyMode = m;
+  document.querySelectorAll('#wpTabs .wp-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  currentPage = 1;
+  fetchAndRender();
+}
+
+// 本地业务结果 Tab 的查询表单（行程单 / 项目进度 / 用户）
+// 行程单「工作内容」取数说明（表头问号 tooltip）
+const TRIP_WORK_TIP = [
+  '工作内容取数逻辑：',
+  '工程工单：工程 + 工单状态',
+  '预调试工单：预调试',
+  '调试工单：客户编号 + 现场调试',
+  '保运工单：站点编码 + 现场保运',
+  '售后工单：维修内容（超 100 字截断）',
+  '日常工单：工作内容（超 100 字截断）',
+  '验收工单：验收类别',
+  '改造工单：改造类型',
+  '同一人同一天多单用「；」连接'
+].join('\n');
+
+const NO_EXPORT = {records: true, 'weekly-plan': true};
+const NO_SAVE = {records: true, 'debug-progress': true, progress2: true, 'weekly-plan': true};
+const RESULT_FORMS = {
+  trip: [
+    {id:'trip_person', label:'姓名', ph:'姓名（空=全部）'},
+    {id:'trip_begin', label:'日期从', type:'date'},
+    {id:'trip_end', label:'日期至', type:'date'},
+    {id:'trip_month', label:'保存月份', type:'month'}
+  ],
+  progress: [
+    {id:'prog_serial', label:'客户编号', ph:'如 BY2026112'},
+    {id:'prog_name', label:'客户名称', ph:'客户名称'},
+    {id:'prog_site', label:'站点名称', ph:'站点名称'}
+  ],
+  progress2: [
+    {id:'p2_serial', label:'客户编号', ph:'如 BY2023148'},
+    {id:'p2_name', label:'客户名称', ph:'客户名称'},
+    {id:'p2_done', label:'显示已完成', type:'checkbox'}
+  ],
+  'weekly-plan': [
+    {id:'wp_week', label:'周（任选该周内一天）', type:'date'}
+  ],
+  users: [
+    {id:'user_name', label:'姓名', ph:'姓名'},
+    {id:'user_dept', label:'部门', ph:'部门'}
+  ],
+  workload: [
+    {id:'wl_month', label:'月份', type:'month'},
+    {id:'wl_person', label:'服务人员', ph:'姓名（空=全部）'}
+  ],
+  records: [
+    {id:'rec_month', label:'月份', type:'month'},
+    {id:'rec_kw', label:'关键字', ph:'工单号/客户/操作人/工单类型'},
+    {id:'rec_action', label:'操作', ph:'如 出发、到达、卡片'}
+  ],
+  'debug-progress': [
+    {id:'debug_month', label:'月份', type:'month', ph:'建单时间（可空=全部）'},
+    {id:'debug_kw', label:'关键字', ph:'工单编号/客户编号/客户名（可空=全部）'}
+  ]
+};
+
+// ══ 在线报表（ol:*）—— 云端实时查询，与本地库无关（2026-11-10）══
+const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress'];
+function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
+const ONLINE_FORMS = {
+  'ol:trip': [
+    {id:'olt_person', label:'姓名', ph:'姓名（空=全部）', param:'keyword'},
+    {id:'olt_begin', label:'日期从', type:'date', param:'date_begin'},
+    {id:'olt_end', label:'日期至', type:'date', param:'date_end'}
+  ],
+  'ol:weekly-plan': [
+    {id:'olw_person', label:'姓名', ph:'姓名（空=全部）', param:'keyword'},
+    {id:'olw_week', label:'周（任选该周内一天）', type:'date', param:'week_start'}
+  ],
+  'ol:progress2': [
+    {id:'olp2_kw', label:'客户编号/名称', ph:'可空', param:'keyword'},
+    {id:'olp2_begin', label:'日期从', type:'date', param:'date_begin', tip:'客户档案的最后更新日期'},
+    {id:'olp2_end', label:'日期至', type:'date', param:'date_end', tip:'客户档案的最后更新日期'},
+    {id:'olp2_done', label:'显示已完成', type:'checkbox', param:'show_done'}
+  ],
+  'ol:workload': [
+    {id:'olwl_person', label:'服务人员', ph:'姓名（空=全部）', param:'keyword'},
+    {id:'olwl_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单的创建时间（建单时间）'},
+    {id:'olwl_end', label:'日期至', type:'date', param:'date_end', tip:'工单的创建时间（建单时间）'}
+  ],
+  'ol:debug-progress': [
+    {id:'oldebug_kw', label:'关键字', ph:'工单编号/客户（可空）', param:'keyword'},
+    {id:'oldebug_begin', label:'日期从', type:'date', param:'date_begin', tip:'实际调试完成日期'},
+    {id:'oldebug_end', label:'日期至', type:'date', param:'date_end', tip:'实际调试完成日期'}
+  ]
+};
+
+function buildResultForm(tab) {
+  const box = document.getElementById('form-row-custom');
+  const isOl = isOnlineTab(tab);
+  const cfg = RESULT_FORMS[tab] || ONLINE_FORMS[tab];
+  if (!cfg) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'flex';
+  let html = '';
+  cfg.forEach(f => {
+    if (f.type === 'checkbox') {
+      html += '<div class="form-group" style="flex-direction:row;align-items:center;gap:6px">'
+            + '<input type="checkbox" id="' + f.id + '" style="min-width:auto;width:16px;height:16px;cursor:pointer" onchange="doSearch()">'
+            + '<label for="' + f.id + '" style="margin:0;cursor:pointer">' + esc(f.label) + '</label></div>';
+    } else {
+      const _inp = '<input type="' + (f.type || 'text') + '" id="' + f.id + '" placeholder="' + esc(f.ph || '') + '">';
+      const _tip = f.tip ? ' <span class="qmark" style="cursor:pointer;vertical-align:middle" onclick="showTip(event,this,' + JSON.stringify(f.tip).replace(/"/g,'&quot;') + ')">?</span>' : '';
+      html += '<div class="form-group"><label style="display:flex;align-items:center;gap:2px">' + esc(f.label) + _tip + '</label>' + _inp + '</div>';
+    }
+  });
+  html += '<button class="btn-query" id="btn-search-res" onclick="doSearch()">🔍 查询</button>';
+  if (isAdmin && !NO_EXPORT[tab]) {
+    html += '<button class="btn-export" onclick="doExport()">📥 导出 Excel</button>';
+  }
+  if (!isOl && isAdmin && !NO_SAVE[tab]) {
+    const _saveTxt = (tab === 'trip' || tab === 'progress') ? '💾 更新' : (tab === 'workload' ? '🔄 更新' : '💾 保存');
+    html += '<button class="btn-save" id="btn-save-res" onclick="doSave()">' + _saveTxt + '</button>';
+  }
+  if (tab === 'ol:debug-progress') {
+    html += '<span style="color:#d63031;font-size:12px;line-height:1.6;max-width:380px">说明：默认查询最近 30 天；查历史请按项目编号查询</span>';
+  }
+  box.innerHTML = html;
+  const m = document.getElementById('trip_month');
+  if (m && !m.value) m.value = new Date().toISOString().slice(0,7);
+  const wm = document.getElementById('wl_month');
+  if (wm && !wm.value) wm.value = new Date().toISOString().slice(0,7);
+  const rm = document.getElementById('rec_month');
+  if (rm && !rm.value) rm.value = new Date().toISOString().slice(0,7);
+  const dm = document.getElementById('debug_month');
+  if (dm && !dm.value) dm.value = new Date().toISOString().slice(0,7);
+  const wk = document.getElementById('wp_week');
+  if (wk && !wk.value) {
+    const _td = new Date();
+    wk.value = _td.getFullYear() + '-' + String(_td.getMonth() + 1).padStart(2, '0') + '-' + String(_td.getDate()).padStart(2, '0');
+  }
+  // 在线报表默认日期：行程单=当月；工作量/调试进度=当周（周一~周日）；项目进度=近 7 天
+  if (isOl) {
+    const _now = new Date();
+    const _mon = new Date(_now); _mon.setDate(_now.getDate() - ((_now.getDay() + 6) % 7));
+    const _sun = new Date(_mon); _sun.setDate(_mon.getDate() + 6);
+    const _m1 = new Date(_now.getFullYear(), _now.getMonth(), 1);
+    const _m2 = new Date(_now.getFullYear(), _now.getMonth() + 1, 0);
+    const _d7 = new Date(_now); _d7.setDate(_now.getDate() - 6);
+    const _set = (id, v) => { const el = document.getElementById(id); if (el && !el.value) el.value = v; };
+    _set('olt_begin', _isoDate(_m1)); _set('olt_end', _isoDate(_m2));
+    _set('olwl_begin', _isoDate(_mon)); _set('olwl_end', _isoDate(_sun));
+    _set('oldebug_begin', _isoDate(_mon)); _set('oldebug_end', _isoDate(_sun));
+    _set('olp2_begin', _isoDate(_d7)); _set('olp2_end', _isoDate(_now));
+    _set('olw_week', _isoDate(_now));
+  }
+  updateJobBox();
+}
+
+// 保存状态按「页签」隔离；保存期间禁用查询/保存按钮
+const ACTIVE_JOBS = {};
+function updateJobBox() {
+  const box = document.getElementById('job-status');
+  if (!RESULT_FORMS[currentTab] && !ONLINE_FORMS[currentTab]) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  const j = ACTIVE_JOBS[currentTab];
+  box.textContent = j ? j.text : '';
+}
+function setSaveButtons(dis) {
+  ['btn-search-res', 'btn-save-res'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) { b.disabled = dis; b.style.opacity = dis ? .5 : 1; b.style.cursor = dis ? 'not-allowed' : 'pointer'; }
+  });
+}
+
+// 行程单：人名标签（初始“全部”；点某人=只看某人）
+function renderPersonBar(persons) {
+  const bar = document.getElementById('person-bar');
+  if (!bar) return;
+  if ((currentTab !== 'trip' && currentTab !== 'ol:trip') || !persons || !persons.length) {
+    bar.style.display = 'none'; bar.innerHTML = ''; return;
+  }
+  const cur = (document.getElementById(currentTab === 'ol:trip' ? 'olt_person' : 'trip_person')||{value:''}).value || '';
+  bar.innerHTML = '';
+  bar.style.display = 'flex'; bar.style.flexWrap = 'wrap'; bar.style.gap = '6px';
+  const mk = (label, val, active) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (active ? ' active' : '');
+    b.textContent = label;
+    b.onclick = () => pickPerson(val);
+    bar.appendChild(b);
+  };
+  mk('全部', '', cur === '');
+  persons.forEach(p => mk(p, p, cur === p));
+}
+
+function pickPerson(name) {
+  const inp = document.getElementById(currentTab === 'ol:trip' ? 'olt_person' : 'trip_person');
+  if (inp) inp.value = name;
+  currentPage = 1;
+  fetchAndRender();
+}
+
+async function doSave() {
+  const label = (currentTab === 'trip') ? '行程单（全员）'
+              : (currentTab === 'workload') ? '服务人员工作量（当月工单动态）'
+              : '项目进度（全量）';
+  if (!confirm('将从 SHB 实时取数并存入本地库：' + label + '。可能需要几分钟，期间可继续查询。确定更新？')) return;
+  const tab = currentTab;
+  const params = new URLSearchParams({tab: tab});
+  if (tab === 'trip') {
+    const m = (document.getElementById('trip_month')||{}).value;
+    if (m) params.set('month', m);
+  } else if (tab === 'workload') {
+    const m = (document.getElementById('wl_month')||{}).value;
+    if (m) params.set('month', m);
+  }
+  try {
+    const resp = await fetch('/shb/api/save?' + params.toString(), {method:'POST'});
+    const d = await resp.json();
+    if (!d.ok) { ACTIVE_JOBS[tab] = {text:'❌ ' + (d.error || '保存失败')}; updateJobBox(); return; }
+    ACTIVE_JOBS[tab] = {id: d.job_id, text:'⏳ 已开始保存，等待完成...'};
+    updateJobBox();
+    setSaveButtons(true);
+    pollJob(d.job_id, tab);
+  } catch(e) { ACTIVE_JOBS[tab] = {text:'❌ 网络错误：' + e.message}; updateJobBox(); }
+}
+
+async function pollJob(id, tab) {
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    let d;
+    try { d = await (await fetch('/shb/api/job?id=' + id)).json(); }
+    catch(e) { ACTIVE_JOBS[tab] = {id: id, text:'❌ 任务状态查询失败：' + e.message}; updateJobBox(); setSaveButtons(false); return; }
+    if (!d.ok) { ACTIVE_JOBS[tab] = {id: id, text:'❌ ' + (d.error || '任务丢失')}; updateJobBox(); setSaveButtons(false); return; }
+    if (d.status === 'ok') {
+      ACTIVE_JOBS[tab] = {id: id, text:'✅ 保存完成' + (d.output ? '：' + d.output.replace(/\n/g,' | ') : '')};
+      updateJobBox(); setSaveButtons(false);
+      if (currentTab === tab) doSearch();
+      return;
+    }
+    if (d.status === 'failed') {
+      ACTIVE_JOBS[tab] = {id: id, text:'❌ 保存失败' + (d.error ? '：' + d.error : '')};
+      updateJobBox(); setSaveButtons(false);
+      return;
+    }
+    ACTIVE_JOBS[tab] = {id: id, text:'⏳ 正在保存（' + (d.status === 'queued' ? '排队中' : '运行中') + '）...'};
+    updateJobBox();
+  }
+}
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// 点击“?”弹出提示（2026-11-10）
+let _tipEl = null;
+function showTip(ev, el, text) {
+  if (ev) ev.stopPropagation();
+  if (_tipEl) { _tipEl.remove(); _tipEl = null; }
+  const t = document.createElement('div');
+  t.className = 'tip-pop';
+  t.textContent = text;
+  document.body.appendChild(t);
+  const r = el.getBoundingClientRect();
+  const w = t.offsetWidth, h = t.offsetHeight;
+  t.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+  t.style.top = (r.bottom + 6 + h > window.innerHeight ? r.top - h - 6 : r.bottom + 6) + 'px';
+  _tipEl = t;
+  const close = (e) => {
+    if (e && (e.target === el || t.contains(e.target))) return;
+    t.remove(); _tipEl = null;
+    document.removeEventListener('click', close);
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
+function doSearch() {
+  currentPage = 1;
+  fetchAndRender();
+}
+function goPage(d) { currentPage += d; if (isAuditTab) fetchAudit(); else if (isSyncLogTab) fetchSyncLog(); else fetchAndRender(); }
+
+function _isoDate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// ══ 在线报表（云端实时）：提交后台任务 → 轮询进度 → 渲染 ══
+let LAST_ONLINE = {};   // tab -> 最近一次在线查询结果（导出用）
+
+function onlineParams() {
+  const cfg = ONLINE_FORMS[currentTab] || [];
+  const p = {};
+  cfg.forEach(f => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    if (f.type === 'checkbox') { if (el.checked) p[f.param] = '1'; return; }
+    const v = (el.value || '').trim();
+    if (v) p[f.param] = v;
+  });
+  if (currentTab === 'ol:weekly-plan') p.mode = weeklyMode || 'plan';
+  return p;
+}
+
+async function fetchOnline() {
+  const loading = document.getElementById('loading'), error = document.getElementById('error'),
+        tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  const box = document.getElementById('job-status');
+  loading.style.display = 'flex'; error.style.display = 'none'; tc.innerHTML = '';
+  pg.style.display = 'none';
+  if (box) { box.style.display = ''; box.textContent = '⏳ 正在提交云端查询…'; }
+  try {
+    const resp = await fetch('/shb/api/online-query?tab=' + encodeURIComponent(currentTab), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(onlineParams())
+    });
+    const d0 = await resp.json();
+    if (!d0.ok) throw new Error(d0.error || '提交失败');
+    if (d0.cached && d0.result) {
+      loading.style.display = 'none'; if (box) box.style.display = 'none';
+      LAST_ONLINE[currentTab] = d0.result; renderResultData(d0.result); return;
+    }
+    const jobId = d0.job_id;
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      let d;
+      try { d = await (await fetch('/shb/api/job?id=' + jobId)).json(); }
+      catch(e) { throw new Error('任务状态查询失败：' + e.message); }
+      if (!d.ok) throw new Error(d.error || '任务丢失');
+      if (box) box.textContent = '⏳ ' + (d.progress || '查询中') + '…';
+      if (d.status === 'ok') {
+        loading.style.display = 'none'; if (box) box.style.display = 'none';
+        LAST_ONLINE[currentTab] = d.result;
+        renderResultData(d.result);
+        return;
+      }
+      if (d.status === 'failed') throw new Error(d.error || '云端查询失败');
+    }
+  } catch(e) {
+    loading.style.display = 'none';
+    if (box) box.style.display = 'none';
+    error.textContent = '云端查询失败：' + e.message;
+    error.style.display = 'block';
+  }
+}
+
+function renderResultData(data) {
+  const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  if (data.sections) { renderSections(data); pg.style.display = 'none'; return; }
+  if (!data.rows || !data.rows.length) {
+    tc.innerHTML = '<div class="empty">暂无数据</div>'; pg.style.display = 'none'; return;
+  }
+  const cols = (data.columns && data.columns.length) ? data.columns : Object.keys(data.rows[0]);
+  const _rawCells = !!data.html_cells;
+  let html = '<table><thead><tr>' + cols.map((c, ci) => {
+    let _th = _rawCells ? c : esc(c);
+    if ((currentTab === 'trip' || currentTab === 'ol:trip') && c === '工作内容') {
+      _th += '<span class="qmark" title="' + esc(TRIP_WORK_TIP) + '">?</span>';
+    }
+    return '<th' + (_rawCells && ci === 0 ? ' style="text-align:center"' : '') + '>' + _th + '</th>';
+  }).join('') + '</tr></thead><tbody>';
+  data.rows.forEach(row => { html += '<tr>' + cols.map((c, ci) => {
+    const _v = row[c] == null ? '' : row[c];
+    if (_rawCells) return '<td title="'+esc(String(_v).replace(/<br\s*\/?>/gi,' / '))+'" class="col-wrap"'+(ci === 0 ? ' style="text-align:center"' : '')+'>'+_v+'</td>';
+    return '<td title="'+esc(_v)+'" class="col-text">'+esc(_v)+'</td>';
+  }).join('') + '</tr>'; });
+  html += '</tbody></table>'; tc.innerHTML = html;
+  if (data.persons) renderPersonBar(data.persons);
+  totalPages = data.total_pages || 1;
+  document.getElementById('page-info').textContent = '第 ' + currentPage + '/' + totalPages + ' 页，共 '
+    + data.total + ' 条' + (data.online && data.elapsed ? '（云端 ' + data.elapsed + 's）' : '');
+  document.getElementById('prev-btn').disabled = currentPage <= 1;
+  document.getElementById('next-btn').disabled = currentPage >= totalPages;
+  pg.style.display = 'flex';
+}
+
+async function fetchAndRender() {
+  if (isOnlineTab(currentTab)) return fetchOnline();
+  const loading = document.getElementById('loading'), error = document.getElementById('error'),
+        tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  loading.style.display = 'flex'; error.style.display = 'none'; tc.innerHTML = '';
+  const params = new URLSearchParams({
+    tab: currentTab, page: currentPage, page_size: 20
+  });
+  let kw = document.getElementById('keyword').value.trim();
+  let db = document.getElementById('date_begin').value;
+  let de = document.getElementById('date_end').value;
+  const sv = document.getElementById('select_val').value;
+  if (!RESULT_FORMS[currentTab]) {
+    if (kw) params.set('keyword', kw);
+    if (db) params.set('date_begin', db);
+    if (de) params.set('date_end', de);
+    if (sv) params.set('select', sv);
+  } else if (currentTab === 'trip') {
+    kw = (document.getElementById('trip_person')||{value:''}).value.trim();
+    db = (document.getElementById('trip_begin')||{value:''}).value;
+    de = (document.getElementById('trip_end')||{value:''}).value;
+    if (kw) params.set('keyword', kw);
+    if (db) params.set('date_begin', db);
+    if (de) params.set('date_end', de);
+  } else if (currentTab === 'progress') {
+    kw = (document.getElementById('prog_serial')||{value:''}).value.trim();
+    const n2 = (document.getElementById('prog_name')||{value:''}).value.trim();
+    const s2 = (document.getElementById('prog_site')||{value:''}).value.trim();
+    if (kw) params.set('keyword', kw);
+    if (n2) params.set('kw2', n2);
+    if (s2) params.set('kw3', s2);
+  } else if (currentTab === 'progress2') {
+    kw = (document.getElementById('p2_serial')||{value:''}).value.trim();
+    const n2 = (document.getElementById('p2_name')||{value:''}).value.trim();
+    const done2 = (document.getElementById('p2_done')||{}).checked;
+    if (kw) params.set('keyword', kw);
+    if (n2) params.set('kw2', n2);
+    if (done2) params.set('show_done', '1');
+  } else if (currentTab === 'weekly-plan') {
+    const w = (document.getElementById('wp_week')||{value:''}).value;
+    if (w) params.set('week_start', w);
+    params.set('mode', weeklyMode || 'plan');
+  } else if (currentTab === 'workload') {
+    kw = (document.getElementById('wl_person')||{value:''}).value.trim();
+    const w2 = (document.getElementById('wl_month')||{value:''}).value;
+    if (kw) params.set('keyword', kw);
+    if (w2) params.set('kw2', w2);
+  } else if (currentTab === 'records') {
+    kw = (document.getElementById('rec_kw')||{value:''}).value.trim();
+    const m2 = (document.getElementById('rec_month')||{value:''}).value;
+    const a2 = (document.getElementById('rec_action')||{value:''}).value.trim();
+    if (kw) params.set('keyword', kw);
+    if (m2) params.set('kw2', m2);
+    if (a2) params.set('kw3', a2);
+  } else if (currentTab === 'debug-progress') {
+    kw = (document.getElementById('debug_kw')||{value:''}).value.trim();
+    const m2 = (document.getElementById('debug_month')||{value:''}).value;
+    if (kw) params.set('keyword', kw);
+    if (m2) params.set('month', m2);
+  } else {
+    kw = (document.getElementById('user_name')||{value:''}).value.trim();
+    const d2 = (document.getElementById('user_dept')||{value:''}).value.trim();
+    if (kw) params.set('keyword', kw);
+    if (d2) params.set('kw2', d2);
+  }
+  try {
+    const resp = await fetch('/shb/api/search?' + params.toString());
+    if (!resp.ok) { error.textContent = 'HTTP ' + resp.status + ' ' + resp.statusText; error.style.display = 'block'; loading.style.display = 'none'; return; }
+    const data = await resp.json();
+    loading.style.display = 'none';
+    if (!data.ok) { error.textContent = data.error || '查询失败'; error.style.display = 'block'; return; }
+    renderResultData(data);
+  } catch(e) { loading.style.display = 'none'; error.textContent = '网络错误：' + e.message; error.style.display = 'block'; }
+}
+
+function doExport() {
+  if (isOnlineTab(currentTab)) { doExportOnline(); return; }
+  const params = new URLSearchParams({ tab: currentTab });
+  const isRes = !!RESULT_FORMS[currentTab];
+  let kw = document.getElementById('keyword').value.trim();
+  let db = document.getElementById('date_begin').value;
+  let de = document.getElementById('date_end').value;
+  const sv = document.getElementById('select_val').value;
+  if (!isRes) {
+    if (kw) params.set('keyword', kw);
+    if (db) params.set('date_begin', db);
+    if (de) params.set('date_end', de);
+    if (sv) params.set('select', sv);
+  } else if (currentTab === 'trip') {
+    kw = (document.getElementById('trip_person')||{value:''}).value.trim();
+    db = (document.getElementById('trip_begin')||{value:''}).value;
+    de = (document.getElementById('trip_end')||{value:''}).value;
+    if (kw) params.set('keyword', kw);
+    if (db) params.set('date_begin', db);
+    if (de) params.set('date_end', de);
+  } else if (currentTab === 'progress') {
+    kw = (document.getElementById('prog_serial')||{value:''}).value.trim();
+    const n2 = (document.getElementById('prog_name')||{value:''}).value.trim();
+    const s2 = (document.getElementById('prog_site')||{value:''}).value.trim();
+    if (kw) params.set('keyword', kw);
+    if (n2) params.set('kw2', n2);
+    if (s2) params.set('kw3', s2);
+  } else if (currentTab === 'progress2') {
+    kw = (document.getElementById('p2_serial')||{value:''}).value.trim();
+    const n2 = (document.getElementById('p2_name')||{value:''}).value.trim();
+    const done2 = (document.getElementById('p2_done')||{}).checked;
+    if (kw) params.set('keyword', kw);
+    if (n2) params.set('kw2', n2);
+    if (done2) params.set('show_done', '1');
+  } else {
+    kw = (document.getElementById('user_name')||{value:''}).value.trim();
+    const d2 = (document.getElementById('user_dept')||{value:''}).value.trim();
+    if (kw) params.set('keyword', kw);
+    if (d2) params.set('kw2', d2);
+  }
+  if (isRes) { doExportExcel(params); return; }
+  window.open('/shb/api/export?' + params.toString(), '_blank');
+}
+
+// 本地业务结果：前端生成 Excel（与 u8-web 同方案，SheetJS，服务端零依赖）
+async function fetchAllRows(tab, baseParams) {
+  const rows = []; let cols = null, page = 1;
+  while (true) {
+    const p = new URLSearchParams(baseParams);
+    p.set('tab', tab); p.set('page', page); p.set('page_size', 200);
+    const d = await (await fetch('/shb/api/search?' + p.toString())).json();
+    if (!d.ok) throw new Error(d.error || '查询失败');
+    cols = (d.columns && d.columns.length) ? d.columns : cols;
+    rows.push(...(d.rows || []));
+    if (page >= (d.total_pages || 1)) break;
+    page++;
+  }
+  return { cols, rows };
+}
+
+function _sheetName(nm, used) {
+  let base = String(nm || '未署名').replace(/[:\\\/?*\[\]]/g, '_').slice(0, 31) || '未署名';
+  let name = base, k = 2;
+  while (used.has(name)) { const suf = '~' + (k++); name = base.slice(0, 31 - suf.length) + suf; }
+  used.add(name);
+  return name;
+}
+
+let _xlsxPromise = null;
+function ensureXlsx() {
+  if (window.XLSX) return Promise.resolve();
+  if (_xlsxPromise) return _xlsxPromise;
+  _xlsxPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = '/shb/static/xlsx.full.min.js';
+    s.onload = () => window.XLSX ? resolve() : reject(new Error('导出组件加载后不可用'));
+    s.onerror = () => { _xlsxPromise = null; reject(new Error('导出组件加载失败（本地文件缺失）')); };
+    document.head.appendChild(s);
+  });
+  return _xlsxPromise;
+}
+
+async function doExportExcel(baseParams) {
+  const box = document.getElementById('job-status');
+  box.style.display = '';
+  try {
+    if (typeof XLSX === 'undefined') {
+      box.textContent = '⏳ 正在加载导出组件...';
+      await ensureXlsx();
+    }
+    box.textContent = '⏳ 正在生成 Excel...';
+    const tab = currentTab;
+    const { cols, rows } = await fetchAllRows(tab, tab === 'trip' ? new URLSearchParams() : baseParams);
+    if (!rows.length) { box.textContent = '⚠️ 当前条件下没有数据可导出'; return; }
+    const wb = XLSX.utils.book_new();
+    if (tab === 'trip') {
+      const byName = {};
+      rows.forEach(r => { const n = r['姓名'] || '未署名'; (byName[n] = byName[n] || []).push(r); });
+      const used = new Set();
+      Object.keys(byName).forEach(nm => {
+        const rs = byName[nm];
+        const aoa = [cols];
+        rs.forEach((r, i) => aoa.push(cols.map(c => (c === '序号' ? i + 1 : r[c]))));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheetName(nm, used));
+      });
+    } else {
+      const aoa = [cols];
+      rows.forEach(r => aoa.push(cols.map(c => r[c])));
+      const _sheet = tab === 'workload' ? '服务人员工作量' : (tab === 'progress2' ? '项目进度2' : '项目进度');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheet);
+    }
+    const d = new Date();
+    const stamp = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+    const fname = (tab === 'trip' ? '行程单_' : (tab === 'workload' ? '服务人员工作量_' : (tab === 'progress2' ? '项目进度2_' : '项目进度_'))) + stamp + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    box.textContent = '✅ 已生成 ' + fname + '（' + rows.length + ' 行' + (tab === 'trip' ? '，按人分页签' : '') + '）';
+  } catch (e) {
+    box.textContent = '❌ 导出失败：' + e.message;
+  }
+}
+
+// 在线报表：直接用最近一次查询结果生成 Excel（不再回查）
+// 在线报表：直接用最近一次查询结果生成 Excel（周计划：周计划+周总结 两个 sheet）
+function _cellText(v) {
+  let s = String(v == null ? '' : v);
+  s = s.replace(/<br\s*\/?>/gi, '\n');
+  s = s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  return s;
+}
+
+function _appendSheet(wb, name, data) {
+  const cols = (data && data.columns) || [];
+  const aoa = [cols.map(_cellText)];
+  ((data && data.rows) || []).forEach(r => aoa.push(cols.map(c => _cellText(r[c]))));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name);
+}
+
+async function fetchWeeklyResult(week, mode, keyword) {
+  const body = {week_start: week, mode: mode};
+  if (keyword) body.keyword = keyword;      // 按当前筛选导出（2026-11-10）
+  const resp = await fetch('/shb/api/online-query?tab=ol:weekly-plan', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  const d0 = await resp.json();
+  if (!d0.ok) throw new Error(d0.error || '提交失败');
+  if (d0.cached && d0.result) return d0.result;
+  const jobId = d0.job_id;
+  const box = document.getElementById('job-status');
+  while (true) {
+    await new Promise(r => setTimeout(r, 1500));
+    let d;
+    try { d = await (await fetch('/shb/api/job?id=' + jobId)).json(); }
+    catch (e) { throw new Error('任务状态查询失败：' + e.message); }
+    if (!d.ok) throw new Error(d.error || '任务丢失');
+    if (box && d.status !== 'ok') {
+      box.style.display = '';
+      box.textContent = '⏳ ' + (mode === 'plan' ? '周计划' : '周总结') + '：' + (d.progress || '查询中') + '…';
+    }
+    if (d.status === 'ok') return d.result;
+    if (d.status === 'failed') throw new Error(d.error || '查询失败');
+  }
+}
+
+async function doExportOnline() {
+  const box = document.getElementById('job-status');
+  const base = {'ol:trip':'行程单（在线）','ol:workload':'服务人员工作量（在线）',
+                'ol:progress2':'项目进度（在线）','ol:debug-progress':'调试进度（在线）',
+                'ol:weekly-plan':'周计划（在线）'}[currentTab] || '在线报表';
+  try {
+    if (typeof XLSX === 'undefined') {
+      if (box) { box.style.display = ''; box.textContent = '⏳ 正在加载导出组件...'; }
+      await ensureXlsx();
+    }
+    const wb = XLSX.utils.book_new();
+    let rowsHint = 0;
+
+    if (currentTab === 'ol:weekly-plan') {
+      const week = ((document.getElementById('olw_week') || {}).value) || _isoDate(new Date());
+      const kw = ((document.getElementById('olw_person') || {}).value || '').trim();
+      if (box) { box.style.display = ''; box.textContent = '⏳ 正在生成周计划 / 周总结…'; }
+      const [p, s] = await Promise.all([fetchWeeklyResult(week, 'plan', kw),
+                                        fetchWeeklyResult(week, 'summary', kw)]);
+      _appendSheet(wb, '周计划', p);
+      _appendSheet(wb, '周总结', s);
+      LAST_ONLINE[currentTab + '|plan'] = p;
+      LAST_ONLINE[currentTab + '|summary'] = s;
+      rowsHint = ((p.rows || []).length) + ((s.rows || []).length);
+    } else {
+      const data = LAST_ONLINE[currentTab];
+      if (!data || !data.rows || !data.rows.length) {
+        if (box) { box.style.display = ''; box.textContent = '⚠️ 请先查询出结果再导出'; }
+        return;
+      }
+      const cols = data.columns || [];
+      if (currentTab === 'ol:trip') {
+        const byName = {};
+        data.rows.forEach(r => { const n = r['姓名'] || '未署名'; (byName[n] = byName[n] || []).push(r); });
+        const used = new Set();
+        Object.keys(byName).forEach(nm => {
+          const rs = byName[nm];
+          const aoa = [cols.map(_cellText)];
+          rs.forEach((r, i) => aoa.push(cols.map(c => (c === '序号' ? i + 1 : _cellText(r[c])))));
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheetName(nm, used));
+        });
+      } else {
+        _appendSheet(wb, base.replace('（在线）', ''), data);
+      }
+      rowsHint = data.rows.length;
+    }
+
+    const d = new Date();
+    const stamp = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+    const fname = base + '_' + stamp + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    if (box) { box.style.display = ''; box.textContent = '✅ 已生成 ' + fname + '（' + rowsHint + ' 行）'; }
+  } catch (e) {
+    if (box) { box.style.display = ''; box.textContent = '❌ 导出失败：' + e.message; }
+  }
+}
+
+// 日志 Tab（仅 admin）
+function renderAuditTable(data) {
+  const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  if (!data.rows.length) { tc.innerHTML = '<div class="empty">暂无日志</div>'; pg.style.display = 'none'; return; }
+  const cols = ['ts','operator','domain','operation','status'];
+  const colLabels = {ts:'时间', operator:'操作人', domain:'域', operation:'操作', status:'状态'};
+  let html = '<table><thead><tr>' + cols.map(c => '<th>'+colLabels[c]+'</th>').join('') + '</tr></thead><tbody>';
+  data.rows.forEach(row => {
+    html += '<tr>' + cols.map(c => {
+      let v = row[c] || '';
+      if (c === 'ts') v = v.replace('T',' ').substring(0,19);
+      if (c === 'status') {
+        const color = v==='failed'?'#d63031':v==='verify_failed'?'#e17055':v==='done'?'#00b894':'#636e72';
+        v = '<span style="color:'+color+';font-weight:600">'+v+'</span>';
+      }
+      return '<td title="'+JSON.stringify(row).substring(0,100)+'" class="col-text">'+v+'</td>';
+    }).join('') + '</tr>';
+  });
+  html += '</tbody></table>';
+  tc.innerHTML = html;
+  document.getElementById('page-info').textContent = '第 '+currentPage+'/'+data.total_pages+' 页，共 '+data.total+' 条';
+  document.getElementById('prev-btn').disabled = currentPage <= 1;
+  document.getElementById('next-btn').disabled = currentPage >= data.total_pages;
+  pg.style.display = 'flex';
+}
+
+async function fetchAudit() {
+  const loading = document.getElementById('loading'), error = document.getElementById('error');
+  loading.style.display = 'flex'; error.style.display = 'none';
+  const params = new URLSearchParams({ page: currentPage, page_size: 50 });
+  const status = document.getElementById('audit_status_filter').value;
+  if (status) params.set('status', status);
+  try {
+    const resp = await fetch('/shb/api/audit?' + params.toString());
+    if (!resp.ok) { error.textContent = 'HTTP '+resp.status; error.style.display = 'block'; loading.style.display = 'none'; return; }
+    const data = await resp.json();
+    loading.style.display = 'none';
+    if (!data.ok) { error.textContent = data.error || '查询失败'; error.style.display = 'block'; return; }
+    renderAuditTable(data);
+  } catch(e) { loading.style.display = 'none'; error.textContent = '网络错误：'+e.message; error.style.display = 'block'; }
+}
+
+function switchToAudit() {
+  isAuditTab = true;
+  isSyncTab = false;
+  isSyncLogTab = false;
+  currentPage = 1;
+  document.getElementById('form-row').style.display = 'none';
+  document.getElementById('form-row-custom').style.display = 'none';
+  document.getElementById('export-btn').style.display = 'none';
+  document.getElementById('audit-filter').style.display = '';
+  renderMenu();
+  fetchAudit();
+}
+
+function renderSections(data) {
+  const tc = document.getElementById('table-container');
+  let html = '';
+  data.sections.forEach(sec => {
+    html += '<div style="padding:14px 16px 8px;font-weight:600;color:#0d6efd;font-size:14px">'+esc(sec.title)+'</div>';
+    if (!sec.rows.length) { html += '<div class="empty" style="padding:16px">无数据</div>'; return; }
+    html += '<table><thead><tr>' + sec.columns.map(c => '<th>'+esc(c)+'</th>').join('') + '</tr></thead><tbody>';
+    sec.rows.forEach(r => {
+      html += '<tr>' + r.map((v, i) => '<td title="'+esc(v)+'" class="'+((sec.columns[i]==='内容'||sec.columns[i]==='备份频率')?'col-wrap':'col-text')+'">'+esc(v)+'</td>').join('') + '</tr>';
+    });
+    html += '</tbody></table>';
+  });
+  tc.innerHTML = html;
+}
+
+// 同步中心（仅 admin）：列出所有“从云端拉数 → 写本地库”的任务，手动触发
+async function fetchSync() {
+  const loading = document.getElementById('loading'), error = document.getElementById('error');
+  const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  loading.style.display = 'flex'; error.style.display = 'none';
+  if (pg) pg.style.display = 'none';
+  try {
+    const d = await (await fetch('/shb/api/sync/status')).json();
+    loading.style.display = 'none';
+    if (!d.ok) { error.textContent = d.error || '加载失败'; error.style.display = 'block'; return; }
+    renderSyncTable(d.tasks);
+  } catch(e) { loading.style.display = 'none'; error.textContent = '网络错误：'+e.message; error.style.display = 'block'; }
+}
+
+function renderSyncTable(tasks) {
+  const tc = document.getElementById('table-container');
+  const th = ['任务','说明','参数','更新哪块数据','上次','操作'];
+  let html = '<table><thead><tr>'+th.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
+  tasks.forEach(t => {
+    let param = '—';
+    if (t.param === 'mode') {
+      param = '<select id="sync_mode_'+t.key+'"><option value="incr">增量</option><option value="full">全量</option></select>';
+    } else if (t.param === 'month') {
+      param = '<input type="month" id="sync_month_'+t.key+'" value="'+new Date().toISOString().slice(0,7)+'">';
+    }
+    const last = t.last ? (esc(t.last.time||'')+' <span style="color:'+(t.last.status==='ok'?'#00b894':'#d63031')+';font-weight:600">'+esc(t.last.status||'')+'</span>') : '<span style="color:#999">从未</span>';
+    const btn = t.running
+      ? '<span style="color:#0d6efd">⏳ 运行中…</span>'
+      : '<button class="btn-save" onclick="runSync(\''+t.key+'\')">▶ 运行</button>';
+    html += '<tr><td><b>'+esc(t.title)+'</b></td><td class="col-text">'+esc(t.desc)+'</td><td>'+param+
+            '</td><td class="col-text">'+esc(t.writes)+'</td><td class="col-text">'+last+'</td><td>'+btn+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  tc.innerHTML = html;
+}
+
+async function runSync(key) {
+  const mode = (document.getElementById('sync_mode_'+key)||{}).value || 'incr';
+  const month = (document.getElementById('sync_month_'+key)||{}).value || '';
+  if (!confirm('确定运行该同步？（从云端拉取并写本地库）')) return;
+  const params = new URLSearchParams({ task: key, mode: mode });
+  if (month) params.set('month', month);
+  try {
+    const d = await (await fetch('/shb/api/sync?'+params.toString(), {method:'POST'})).json();
+    if (!d.ok) { alert(d.error || '提交失败'); fetchSync(); return; }
+    pollSync(d.job_id);
+  } catch(e) { alert('网络错误：'+e.message); fetchSync(); }
+}
+
+async function pollSync(jobId) {
+  fetchSync();
+  while (true) {
+    await new Promise(r=>setTimeout(r,3000));
+    let d; try { d = await (await fetch('/shb/api/job?id='+jobId)).json(); } catch(e) { fetchSync(); return; }
+    if (!d.ok) { fetchSync(); return; }
+    if (d.status === 'ok') { fetchSync(); return; }
+    if (d.status === 'failed') { alert('同步失败：'+(d.error||'')); fetchSync(); return; }
+  }
+}
+
+// 同步日志（仅 admin）：读 sync_runs（全部同步任务的批次记录）
+function renderSyncLogTable(data) {
+  const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  if (!data.rows.length) { tc.innerHTML = '<div class="empty">暂无记录</div>'; pg.style.display = 'none'; return; }
+  const cols = data.columns;
+  let html = '<table><thead><tr>' + cols.map(c=>'<th>'+esc(c)+'</th>').join('') + '</tr></thead><tbody>';
+  data.rows.forEach(row => {
+    html += '<tr>' + cols.map(c => {
+      const v = row[c];
+      if (c === '状态') {
+        const color = v==='ok'?'#00b894':(v==='partial'?'#e17055':'#d63031');
+        return '<td><span style="color:'+color+';font-weight:600">'+esc(v)+'</span></td>';
+      }
+      return '<td title="'+esc(v)+'" class="col-text">'+esc(v)+'</td>';
+    }).join('') + '</tr>';
+  });
+  html += '</tbody></table>';
+  tc.innerHTML = html;
+  document.getElementById('page-info').textContent = '第 '+currentPage+'/'+data.total_pages+' 页，共 '+data.total+' 条';
+  document.getElementById('prev-btn').disabled = currentPage <= 1;
+  document.getElementById('next-btn').disabled = currentPage >= data.total_pages;
+  pg.style.display = 'flex';
+}
+
+async function fetchSyncLog() {
+  const loading = document.getElementById('loading'), error = document.getElementById('error');
+  loading.style.display = 'flex'; error.style.display = 'none';
+  const params = new URLSearchParams({ page: currentPage, page_size: 50 });
+  try {
+    const d = await (await fetch('/shb/api/synclog?'+params.toString())).json();
+    loading.style.display = 'none';
+    if (!d.ok) { error.textContent = d.error || '加载失败'; error.style.display = 'block'; return; }
+    renderSyncLogTable(d);
+  } catch(e) { loading.style.display = 'none'; error.textContent = '网络错误：'+e.message; error.style.display = 'block'; }
+}
+
+function switchToSyncLog() {
+  isSyncLogTab = true; isAuditTab = false; isSyncTab = false; isIdTab = false; currentPage = 1;
+  document.getElementById('form-row').style.display = 'none';
+  document.getElementById('form-row-custom').style.display = 'none';
+  document.getElementById('export-btn').style.display = 'none';
+  document.getElementById('audit-filter').style.display = 'none';
+  renderPersonBar(null);
+  renderMenu();
+  fetchSyncLog();
+}
+
+function switchToSync() {
+  isSyncTab = true; isAuditTab = false; isSyncLogTab = false; isIdTab = false; currentPage = 1;
+  document.getElementById('form-row').style.display = 'none';
+  document.getElementById('form-row-custom').style.display = 'none';
+  document.getElementById('export-btn').style.display = 'none';
+  document.getElementById('audit-filter').style.display = 'none';
+  renderPersonBar(null);
+  renderMenu();
+  fetchSync();
+}
+
+function switchToIdentity() {
+  isIdTab = true; isAuditTab = false; isSyncTab = false; isSyncLogTab = false; currentPage = 1;
+  document.getElementById('form-row').style.display = 'none';
+  document.getElementById('form-row-custom').style.display = 'none';
+  document.getElementById('export-btn').style.display = 'none';
+  document.getElementById('audit-filter').style.display = 'none';
+  renderPersonBar(null);
+  renderMenu();
+  fetchIdentity();
+}
+
+const ID_HELP_HTML = [
+  '<div style="margin:8px 16px 24px;border:1px solid #dfe6e9;border-radius:8px;background:#fbfcfd">',
+  '  <div style="padding:10px 14px;border-bottom:1px solid #eef2f5;font-weight:600;color:#2d3436;font-size:14px">📖 使用说明</div>',
+  '  <div style="display:flex;flex-wrap:wrap;gap:24px;padding:14px">',
+  '    <div style="flex:1 1 320px;min-width:280px">',
+  '      <div style="font-weight:600;color:#0984e3;margin-bottom:6px;font-size:13px">切换身份</div>',
+  '      <ol style="margin:0 0 0 18px;padding:0;color:#4b5563;font-size:13px;line-height:1.9">',
+  '        <li>在列表中找到目标身份，点“切换”。</li>',
+  '        <li>系统先探测该身份令牌。<b>有效</b>→ 直接切换，几秒完成。</li>',
+  '        <li><b>无效或已过期</b>→ 提示需先授权，点“立即生成授权链接”。</li>',
+  '        <li>把链接发给<b>该身份本人</b>，本人用自己账号确认。</li>',
+  '        <li>页面每 5 秒自动检查，授权成功后自动完成切换。</li>',
+  '      </ol>',
+  '    </div>',
+  '    <div style="flex:1 1 320px;min-width:280px">',
+  '      <div style="font-weight:600;color:#d63031;margin-bottom:6px;font-size:13px">注意事项</div>',
+  '      <ul style="margin:0 0 0 18px;padding:0;color:#4b5563;font-size:13px;line-height:1.9">',
+  '        <li><b>切换是全局的。</b>所有查询、同步、定时任务都改用新身份运行。</li>',
+  '        <li><b>两个按钮不一样。</b>“切换”改全局默认；“生成授权链接”只给个人用，不改默认。</li>',
+  '        <li><b>权限会变。</b>换成普通员工后，能查到的工单会变少，这是正常的。</li>',
+  '        <li><b>链接只发本人。</b>授权必须本人用自己的售后宝账号确认，不能代点。</li>',
+  '        <li><b>同一时间只能一个。</b>有授权任务在等待时，不能再生成新链接。</li>',
+  '        <li><b>同一账号只能一处登录。</b>别处再登录会顶号，需重新授权。</li>',
+  '        <li><b>自动备份与回滚。</b>切换前备份配置；切换后校验，失败自动回滚。</li>',
+  '        <li><b>链接有效期约 30 分钟。</b>过期或被顶号，重新生成即可。</li>',
+  '      </ul>',
+  '    </div>',
+  '  </div>',
+  '</div>'
+].join('');
+
+async function fetchIdentity() {
+  const tc = document.getElementById('table-container');
+  const loading = document.getElementById('loading'), error = document.getElementById('error');
+  document.getElementById('pagination').style.display = 'none';
+  loading.style.display = 'flex'; error.style.display = 'none'; tc.innerHTML = '';
+  try {
+    const d = await (await fetch('/shb/api/identity/list')).json();
+    loading.style.display = 'none';
+    if (!d.ok) { error.textContent = d.error || '读取失败'; error.style.display = 'block'; return; }
+    let html = '<div style="padding:12px 16px">当前生效身份：<b>' + esc(d.current) + '</b>';
+    if (d.waiting) html += '　<span style="color:#d63031">待授权中：' + esc(d.waiting) + '</span>';
+    html += '</div>';
+    html += '<table><thead><tr><th>身份标识</th><th>显示名</th><th>最后登录</th><th>当前</th><th>操作</th></tr></thead><tbody>';
+    d.rows.forEach(r => {
+      const cur = r['当前'] === '★';
+      html += '<tr><td class="col-text">' + esc(r.profile) + '</td><td>' + esc(r['显示名']) + '</td><td>' + esc(r['最后登录']) + '</td><td>' + (cur ? '★' : '') + '</td><td>';
+      if (cur) {
+        html += '—';
+      } else {
+        html += '<button class="btn-query" onclick="idSwitch(\'' + r.profile + '\')">切换</button> ';
+        html += '<button class="btn-save" onclick="idAuth(\'' + r.profile + '\')">生成授权链接</button>';
+      }
+      html += '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div id="id-msg" style="padding:12px 16px;color:#636e72;font-size:14px"></div>';
+    html += '<div id="id-link" style="padding:0 16px 16px"></div>';
+    html += ID_HELP_HTML;
+    tc.innerHTML = html;
+  } catch(e) {
+    loading.style.display = 'none';
+    error.textContent = '网络错误：' + e.message; error.style.display = 'block';
+  }
+}
+
+async function idSwitch(profile, skipConfirm) {
+  if (!skipConfirm && !confirm('切换后，所有查询、同步、定时任务都将使用「' + profile + '」的身份运行。确定切换？')) return;
+  const msg = document.getElementById('id-msg');
+  if (msg) msg.textContent = '⏳ 正在探测并切换...';
+  try {
+    const d = await (await fetch('/shb/api/identity/switch', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({profile: profile})
+    })).json();
+    if (d.ok && d.status === 'switched') { if (msg) msg.textContent = '✅ 已切换到 ' + d.current; fetchIdentity(); return; }
+    if (d.ok && d.status === 'already') { if (msg) msg.textContent = 'ℹ️ 已是当前身份'; return; }
+    if (d.ok && d.status === 'need_auth') {
+      if (msg) {
+        msg.innerHTML = '⚠️ ' + esc(d.message) + '　';
+        const b = document.createElement('button');
+        b.className = 'btn-save'; b.textContent = '立即生成授权链接';
+        b.onclick = () => idAuth(profile);
+        msg.appendChild(b);
+      }
+      return;
+    }
+    if (msg) msg.textContent = '❌ ' + (d.error || '切换失败');
+  } catch(e) { if (msg) msg.textContent = '❌ 网络错误：' + e.message; }
+}
+
+async function idAuth(profile) {
+  const msg = document.getElementById('id-msg'), linkBox = document.getElementById('id-link');
+  if (msg) msg.textContent = '⏳ 正在生成授权链接...';
+  if (linkBox) linkBox.innerHTML = '';
+  try {
+    const d = await (await fetch('/shb/api/identity/authlink', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({profile: profile})
+    })).json();
+    if (!d.ok) { if (msg) msg.textContent = '❌ ' + (d.error || '生成失败'); return; }
+    if (!d.url) { if (msg) msg.textContent = '❌ 未取到链接，请稍后重试'; return; }
+    if (msg) msg.textContent = '✅ 链接已生成，仅发给本人，约 30 分钟内有效';
+    if (linkBox) {
+      const a = document.createElement('a');
+      a.href = d.url; a.target = '_blank'; a.textContent = d.url;
+      a.style.wordBreak = 'break-all';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'background:#f8f9fa;border:1px solid #dfe6e9;border-radius:6px;padding:10px;font-size:13px;margin-bottom:8px';
+      wrap.appendChild(a);
+      const cb = document.createElement('button');
+      cb.className = 'btn-export'; cb.textContent = '取消等待';
+      cb.onclick = () => idCancel(profile);
+      linkBox.appendChild(wrap);
+      linkBox.appendChild(cb);
+    }
+    idPoll(profile);
+  } catch(e) { if (msg) msg.textContent = '❌ 网络错误：' + e.message; }
+}
+
+async function idPoll(profile) {
+  const msg = document.getElementById('id-msg');
+  while (true) {
+    await new Promise(r => setTimeout(r, 5000));
+    let d;
+    try {
+      d = await (await fetch('/shb/api/identity/authstatus?profile=' + encodeURIComponent(profile))).json();
+    } catch(e) { if (msg) msg.textContent = '❌ 状态查询失败：' + e.message; return; }
+    if (!d.ok) return;
+    if (d.status === 'waiting') {
+      if (msg) msg.textContent = '⏳ 等待本人确认授权（已 ' + (d.elapsed || 0) + ' 秒）...';
+      continue;
+    }
+    if (d.status === 'success') {
+      if (msg) msg.textContent = '✅ 授权成功，正在切换身份...';
+      await idSwitch(profile, true);
+      return;
+    }
+    if (d.status === 'timeout' || d.status === 'none') {
+      if (msg) msg.textContent = '⌛ 授权未完成（超时或已取消），可重新生成链接';
+      return;
+    }
+    return;
+  }
+}
+
+async function idCancel(profile) {
+  const msg = document.getElementById('id-msg'), linkBox = document.getElementById('id-link');
+  try {
+    await fetch('/shb/api/identity/cancel', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({profile: profile})
+    });
+    if (msg) msg.textContent = '已取消等待';
+    if (linkBox) linkBox.innerHTML = '';
+  } catch(e) { if (msg) msg.textContent = '❌ 取消失败：' + e.message; }
+}
+
+function switchToTab(tab) {
+  isAuditTab = false;
+  isSyncTab = false;
+  isSyncLogTab = false;
+  isIdTab = false;
+  isUsersAccountTab = false;
+  const isOverview = (tab === 'bk_overview');
+  const isRes = !!RESULT_FORMS[tab] || isOnlineTab(tab);
+  document.getElementById('form-row').style.display = (isOverview || isRes) ? 'none' : '';
+  buildResultForm(tab);
+  document.getElementById('audit-filter').style.display = 'none';
+  const eb = document.getElementById('export-btn');
+  eb.style.display = (userTabs && userTabs.includes(tab) && !isOverview && !NO_EXPORT[tab]) ? '' : 'none';
+  eb.textContent = isRes ? '📥 导出 Excel' : '📥 导出 CSV';
+  updateJobBox();
+  if (tab !== 'trip') renderPersonBar(null);
+  currentTab = tab; currentPage = 1; renderMenu(); doSearch();
+}
+
+// ══ 账号管理（登录账号 + Tab 权限）══
+// uaRows：当前列表；uaTabsMeta：全部可选 Tab（key + 中文名）；uaEditing：正在编辑的用户名（null=新增）
+let uaRows = [], uaTabsMeta = [], uaEditing = null;
+
+function switchToUsersAccount() {
+  isUsersAccountTab = true;
+  isAuditTab = isSyncTab = isSyncLogTab = isIdTab = false;
+  document.getElementById('form-row').style.display = 'none';
+  document.getElementById('form-row-custom').style.display = 'none';
+  document.getElementById('export-btn').style.display = 'none';
+  document.getElementById('audit-filter').style.display = 'none';
+  renderPersonBar(null);
+  renderMenu();
+  fetchUsersAccount();
+}
+
+// 统一请求处理：区分「登录失效/无权限/服务异常」，避免把 HTML 错误页当 JSON 解析
+async function uaFetchJson(url, opts) {
+  const resp = await fetch(url, opts);
+  if (!resp.ok) {
+    if (resp.status === 401) throw new Error('登录已失效，请关闭所有浏览器窗口后重新打开并登录');
+    if (resp.status === 403) throw new Error('仅管理员可操作，请用 admin 账号登录');
+    throw new Error('请求失败（HTTP ' + resp.status + '）');
+  }
+  const ct = (resp.headers.get('content-type') || '').toLowerCase();
+  if (ct.indexOf('json') < 0) throw new Error('服务返回异常，请刷新页面后重试');
+  return resp.json();
+}
+
+async function fetchUsersAccount() {
+  const tc = document.getElementById('table-container');
+  const loading = document.getElementById('loading'), error = document.getElementById('error');
+  loading.style.display = 'flex'; error.style.display = 'none'; tc.innerHTML = '';
+  document.getElementById('pagination').style.display = 'none';
+  try {
+    const d = await uaFetchJson('/shb/api/users-account');
+    loading.style.display = 'none';
+    if (!d.ok) { error.textContent = d.error || '加载失败'; error.style.display = 'block'; return; }
+    uaRows = d.rows || []; uaTabsMeta = d.tabs || [];
+    renderUsersAccount();
+  } catch (e) {
+    loading.style.display = 'none';
+    error.textContent = '网络错误：' + e.message; error.style.display = 'block';
+  }
+}
+
+function uaTabTitle(key) {
+  const hit = uaTabsMeta.find(t => t.key === key);
+  return hit ? hit.title : key;
+}
+
+function renderUsersAccount() {
+  const tc = document.getElementById('table-container');
+  let html = '<div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 10px">';
+  html += '<div style="font-size:15px;font-weight:600;color:#15324e">账号管理</div>';
+  html += '<button class="btn-query" onclick="openUaModal(-1)">+ 新增用户</button></div>';
+  html += '<table><thead><tr><th style="width:150px">用户名</th><th style="width:110px">登录密码</th>'
+        + '<th>可访问 Tab</th><th style="width:150px">操作</th></tr></thead><tbody>';
+  uaRows.forEach((r, i) => {
+    const pw = r.has_password
+      ? '<span style="color:#00b894;font-weight:600">已设置</span>'
+      : '<span style="color:#d63031;font-weight:600">未设置</span>';
+    let chips;
+    if (r.is_admin) {
+      chips = '<span class="chip active">全部权限</span>';
+    } else if (!r.tabs.length) {
+      chips = '<span style="color:#999">未分配</span>';
+    } else {
+      chips = r.tabs.map(t => '<span class="chip">' + esc(uaTabTitle(t)) + '</span>').join('');
+    }
+    html += '<tr><td class="col-text" style="font-weight:600">' + esc(r.user)
+          + (r.is_admin ? ' <span style="color:#d63031;font-weight:400">(内置)</span>' : '') + '</td>';
+    html += '<td>' + pw + '</td><td class="col-wrap">' + chips + '</td><td>';
+    html += '<button class="btn-query" onclick="openUaModal(' + i + ')">'
+          + (r.is_admin ? '改密码' : '编辑') + '</button> ';
+    if (!r.is_admin) {
+      html += '<button class="btn-save" style="background:#d63031" onclick="deleteUaUser(' + i + ')">删除</button>';
+    }
+    html += '</td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<div style="padding:14px 2px;color:#6b7280;font-size:12px;line-height:1.9">'
+        + '说明：新增用户会同时写入登录账号与 Tab 权限，保存后即可用该用户名登录。'
+        + 'admin 为内置管理员，固定拥有全部权限，只能改密码。</div>';
+  tc.innerHTML = html;
+}
+
+function openUaModal(idx) {
+  const isEdit = idx >= 0;
+  const row = isEdit ? uaRows[idx] : null;
+  uaEditing = isEdit ? row.user : null;
+  const selected = isEdit ? (row.tabs || []) : [];
+
+  let html = '<div style="font-weight:600;font-size:15px;margin-bottom:14px">'
+           + (isEdit ? '编辑用户：' + esc(row.user) : '新增用户') + '</div>';
+  html += '<div class="form-group" style="margin-bottom:12px"><label>用户名</label>'
+        + '<input type="text" id="ua_user" value="' + esc(isEdit ? row.user : '')
+        + '" placeholder="字母/数字/下划线，如 zhangsan"' + (isEdit ? ' readonly' : '') + '></div>';
+  html += '<div class="form-group" style="margin-bottom:6px"><label>'
+        + (isEdit ? '重置密码（留空表示不修改）' : '登录密码') + '</label>'
+        + '<input type="password" id="ua_pw" placeholder="' + (isEdit ? '留空=不改' : '至少 6 位')
+        + '" autocomplete="new-password"></div>';
+
+  if (!(isEdit && row.is_admin)) {
+    html += '<div class="form-group" style="margin-top:12px"><label>可访问 Tab</label>'
+          + '<div style="display:flex;gap:8px;margin:4px 0 8px">'
+          + '<button type="button" class="chip" onclick="uaToggleAll(1)">全选</button>'
+          + '<button type="button" class="chip" onclick="uaToggleAll(0)">清空</button></div>'
+          + '<div id="ua_chips" style="display:flex;flex-wrap:wrap;gap:6px;max-height:280px;overflow:auto">';
+    uaTabsMeta.forEach(t => {
+      const on = selected.indexOf(t.key) >= 0;
+      html += '<button type="button" class="chip' + (on ? ' active' : '')
+            + '" data-key="' + esc(t.key) + '" onclick="this.classList.toggle(\'active\')">'
+            + esc(t.title) + '</button>';
+    });
+    html += '</div></div>';
+  } else {
+    html += '<div style="margin-top:12px;color:#6b7280;font-size:13px">该账号为内置管理员，固定拥有全部权限。</div>';
+  }
+
+  html += '<div id="ua_msg" style="margin-top:10px;font-size:13px;color:#d63031"></div>';
+  html += '<div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">'
+        + '<button class="btn-query" style="background:#95a5a6" onclick="closeUaModal()">取消</button>'
+        + '<button class="btn-save" id="ua_submit" onclick="saveUaUser()">保存</button></div>';
+
+  const box = document.createElement('div');
+  box.id = 'ua_modal';
+  box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  box.innerHTML = '<div style="background:#fff;border-radius:10px;padding:20px;width:560px;max-width:100%;max-height:88vh;overflow:auto">' + html + '</div>';
+  box.onclick = e => { if (e.target === box) closeUaModal(); };
+  document.body.appendChild(box);
+}
+
+function uaToggleAll(on) {
+  document.querySelectorAll('#ua_chips .chip').forEach(b => b.classList.toggle('active', !!on));
+}
+
+function closeUaModal() {
+  const box = document.getElementById('ua_modal');
+  if (box) box.remove();
+}
+
+async function saveUaUser() {
+  const nameInp = document.getElementById('ua_user');
+  const pwInp = document.getElementById('ua_pw');
+  const msg = document.getElementById('ua_msg');
+  const btn = document.getElementById('ua_submit');
+  const name = (nameInp.value || '').trim();
+  const password = (pwInp.value || '');
+  const tabs = Array.from(document.querySelectorAll('#ua_chips .chip.active')).map(b => b.dataset.key);
+
+  msg.textContent = '';
+  if (!name) { msg.textContent = '用户名不能为空'; return; }
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const d = await uaFetchJson('/shb/api/users-account', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({user: name, tabs: tabs, password: password})
+    });
+    if (!d.ok) { msg.textContent = d.error || '保存失败'; btn.disabled = false; btn.textContent = '保存'; return; }
+    closeUaModal();
+    fetchUsersAccount();
+  } catch (e) {
+    msg.textContent = '网络错误：' + e.message;
+    btn.disabled = false; btn.textContent = '保存';
+  }
+}
+
+async function deleteUaUser(idx) {
+  const row = uaRows[idx];
+  if (!row) return;
+  if (!confirm('确定删除用户「' + row.user + '」？\n将同时移除登录账号与 Tab 权限，删除后无法登录。')) return;
+  try {
+    const d = await uaFetchJson('/shb/api/users-account/' + encodeURIComponent(row.user),
+                                {method: 'DELETE'});
+    if (!d.ok) { alert('删除失败：' + (d.error || '未知错误')); return; }
+    fetchUsersAccount();
+  } catch (e) { alert('网络错误：' + e.message); }
+}
+
+document.getElementById('keyword').addEventListener('keypress', e => { if(e.key==='Enter') doSearch(); });
+
+// 侧边栏收起/展开
+const _sb = document.getElementById('sidebar'), _edge = document.getElementById('edge');
+document.getElementById('toggleBtn').onclick = () => { _sb.classList.add('hidden'); _edge.classList.add('show'); };
+_edge.onclick = () => { _sb.classList.remove('hidden'); _edge.classList.remove('show'); };
+
+// 初始化（不自动查询：等用户点「查询」）
+renderMenu();
+buildResultForm(currentTab);
+document.getElementById('table-container').innerHTML = '<div class="empty">输入条件后点击「查询」</div>';
+document.getElementById('pagination').style.display = 'none';
+const _eb = document.getElementById('export-btn');
+_eb.style.display = (isAdmin && currentTab !== 'bk_overview' && !NO_EXPORT[currentTab]) ? '' : 'none';
+_eb.textContent = RESULT_FORMS[currentTab] ? '📥 导出 Excel' : '📥 导出 CSV';
+</script>
+</body>
+</html>
