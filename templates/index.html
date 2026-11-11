@@ -6,92 +6,142 @@
 <title>SHB 数据</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; background:#f0f2f5; color:#2d3436; height:100vh; overflow:hidden; }
+
+/* ── 设计令牌（2026-11-11 unslop：石墨灰 + 仪表绿）── */
+:root{
+  /* 取色自售后宝正式系统（2026-11-11 hunter 提供截图）：侧栏 #21333f，主色青 #13c2c2 */
+  --bg:#f4f6f9; --surface:#ffffff; --surface-2:#f9fafc; --surface-3:#edf1f5;
+  --line:rgba(33,51,63,.10); --line-2:rgba(33,51,63,.17);
+  --ink:#1e2c37; --ink-2:#5a6873; --ink-3:#818d97;
+  --accent:#10b0b0; --accent-ink:#0d9a9a; --accent-soft:rgba(19,194,194,.16);
+  --accent-bright:#13c2c2;
+  --btn-export:#12855b; --btn-export-ink:#0d6344; --btn-export-soft:rgba(18,133,91,.10);
+  --btn-save:#c2761b; --btn-save-ink:#9c5c13; --btn-save-soft:rgba(194,118,27,.10);
+  --danger:#c0392b; --danger-soft:rgba(192,57,43,.08);
+  --side:#2b4353; --side-2:#35505f; --side-ink:#d8e2e8; --side-ink-2:#9aacb8;
+  --r-sm:8px; --r-md:12px; --r-lg:14px;
+  --focus:0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+body { font-family:-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB',sans-serif; background:var(--bg); color:var(--ink); height:100vh; overflow:hidden; font-size:14px; -webkit-font-smoothing:antialiased; }
 .app { display:flex; height:100vh; }
 
 /* ── 侧边栏 ── */
-.sidebar { width:230px; flex:0 0 230px; background:#15324e; color:#c8d6e5; display:flex; flex-direction:column; transition:margin-left .18s ease; }
-.sidebar.hidden { margin-left:-230px; }
-.side-head { height:54px; display:flex; align-items:center; padding:0 18px; font-size:16px; font-weight:700; color:#fff; border-bottom:1px solid #1f4267; }
-.menu { flex:1; overflow-y:auto; padding:8px 0; }
-.group-title { display:flex; align-items:center; justify-content:space-between; font-size:15px; font-weight:600; color:#e6eef7; padding:10px 18px 6px; cursor:pointer; user-select:none; }
-.gicon { display:inline-block; width:20px; margin-right:6px; text-align:center; }
-.group-title:hover { color:#fff; }
-.group-title .caret { font-size:11px; color:#8fa8c4; transition:transform .15s; }
+.sidebar { width:248px; flex:0 0 248px; background:var(--side); color:var(--side-ink); display:flex; flex-direction:column; transition:margin-left .16s ease; }
+.sidebar.hidden { margin-left:-248px; }
+.side-head { height:56px; display:flex; align-items:center; gap:10px; padding:0 20px; font-size:15px; font-weight:600; color:#fff; border-bottom:1px solid rgba(255,255,255,.07); }
+.brand-mark { width:20px; height:20px; flex:0 0 20px; color:var(--accent); }
+.menu { flex:1; overflow-y:auto; padding:12px 0; }
+.group + .group { margin-top:8px; }
+.group-title { display:flex; align-items:center; justify-content:space-between; font-size:15px; font-weight:600; color:var(--side-ink); padding:10px 20px; cursor:pointer; user-select:none; }
+.gicon { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin-right:10px; color:var(--side-ink-2); vertical-align:middle; }
+.gicon svg { width:16px; height:16px; stroke-width:1.5; }
+.group-title:hover { color:var(--side-ink); }
+.group-title .caret { font-size:10px; color:var(--side-ink-2); transition:transform .15s ease; }
 .group.collapsed .group-title .caret { transform:rotate(-90deg); }
 .group.collapsed .group-items { display:none; }
-.item { display:flex; align-items:center; gap:8px; padding:9px 18px 9px 41px; font-size:14px; color:#c8d6e5; cursor:pointer; border-left:3px solid transparent; white-space:nowrap; }
-.item:hover { background:#1b3d5e; color:#fff; }
-.item.active { background:#0d6efd; color:#fff; border-left-color:#7fd1ff; }
-.side-foot { height:54px; display:flex; align-items:center; gap:8px; padding:0 16px; border-top:1px solid #1f4267; font-size:13px; }
-.avatar { width:26px; height:26px; border-radius:50%; background:#0d6efd; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; }
-.uname { flex:1; color:#e6eef7; }
-.logout { color:#ff9a9a; text-decoration:none; font-size:12px; }
+/* 签名细节：每行左侧 3px 刻度线，激活时点亮为仪表绿 */
+.item { position:relative; display:flex; align-items:center; gap:8px; padding:9px 20px 9px 36px; font-size:13.5px; color:var(--side-ink); cursor:pointer; white-space:nowrap; transition:background-color .12s ease,color .12s ease; }
+.item::before { content:""; position:absolute; left:20px; top:50%; width:3px; height:14px; margin-top:-7px; background:rgba(255,255,255,.16); border-radius:1.5px; transition:background-color .12s ease,height .12s ease,margin-top .12s ease; }
+.item:hover { background:var(--side-2); color:#fff; }
+.item.active { background:var(--side-2); color:#fff; }
+.item.active::before { background:var(--accent-bright); height:18px; margin-top:-9px; }
+.side-foot { height:56px; display:flex; align-items:center; gap:10px; padding:0 20px; border-top:1px solid rgba(255,255,255,.07); font-size:13px; }
+.avatar { width:28px; height:28px; border-radius:50%; background:var(--side-2); border:1px solid rgba(255,255,255,.12); color:var(--side-ink); display:flex; align-items:center; justify-content:center; font-size:12px; }
+.uname { flex:1; color:var(--side-ink); font-size:13px; }
+.logout { color:var(--side-ink-2); text-decoration:none; font-size:12px; }
+.logout:hover { color:#fff; }
 
 /* ── 收起后的细边 ── */
-.edge { display:none; width:16px; flex:0 0 16px; background:#15324e; color:#c8d6e5; align-items:center; justify-content:center; cursor:pointer; font-size:11px; }
-.edge:hover { background:#0d6efd; color:#fff; }
+.edge { display:none; width:16px; flex:0 0 16px; background:var(--side); color:var(--side-ink-2); align-items:center; justify-content:center; cursor:pointer; font-size:10px; }
+.edge:hover { background:var(--side-2); color:#fff; }
 .edge.show { display:flex; }
 
 /* ── 主区 ── */
-.main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
-.topbar { height:52px; background:#fff; border-bottom:1px solid #e3e8ee; display:flex; align-items:center; gap:14px; padding:0 18px; }
-.icon-btn { width:34px; height:34px; border:1px solid #dfe6e9; background:#fff; border-radius:7px; cursor:pointer; font-size:16px; }
-.crumb { font-size:15px; font-weight:600; color:#15324e; }
-.crumb-note { font-size:11.5px; color:#d63031; line-height:1.35; white-space:pre-line; overflow:hidden; max-height:48px; flex:1; min-width:0; }
-.wp-tab { padding:5px 14px; border:1px solid #dfe6e9; background:#fff; border-radius:14px; font-size:13px; color:#6b7280; cursor:pointer; }
-.wp-tab:hover { border-color:#0d6efd; color:#0d6efd; }
-.wp-tab.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
+.main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+.topbar { height:56px; background:var(--surface); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; padding:0 20px; }
+.icon-btn { width:32px; height:32px; border:1px solid var(--line); background:var(--surface); border-radius:var(--r-sm); cursor:pointer; font-size:15px; color:var(--ink-2); display:inline-flex; align-items:center; justify-content:center; transition:background-color .12s ease,border-color .12s ease; }
+.icon-btn:hover { background:var(--surface-2); border-color:var(--line-2); }
+.crumb { font-size:15px; font-weight:600; color:var(--ink); }
+.crumb-note { font-size:12px; color:var(--ink-3); line-height:1.5; white-space:pre-line; overflow:hidden; max-height:48px; flex:1; min-width:0; }
+.wp-tab { padding:5px 14px; border:1px solid var(--line); background:var(--surface); border-radius:var(--r-sm); font-size:13px; color:var(--ink-2); cursor:pointer; transition:background-color .12s ease,color .12s ease,border-color .12s ease; }
+.wp-tab:hover { border-color:var(--line-2); color:var(--ink); }
+.wp-tab.active { background:var(--accent-soft); color:#0a7a7a; border-color:rgba(19,194,194,.45); }
 
 /* ── 查询区 ── */
-.query-box { background:#fff; border-bottom:1px solid #e3e8ee; padding:14px 18px; }
+.query-box { background:var(--surface); border-bottom:1px solid var(--line); padding:16px 20px; }
 .form-row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
 .form-group { display:flex; flex-direction:column; gap:6px; }
-.form-group label { font-size:12px; color:#6b7280; font-weight:500; }
-.form-group input, .form-group select { padding:8px 12px; border:1px solid #dfe6e9; border-radius:6px; font-size:14px; outline:none; min-width:160px; }
-/* ── 多选下拉（错误类型筛选，2026-11-11）── */
+.form-group label { font-size:12px; color:var(--ink-2); font-weight:500; }
+.form-group input, .form-group select { padding:8px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); font-size:14px; color:var(--ink); background:var(--surface); outline:none; min-width:160px; transition:border-color .12s ease,box-shadow .12s ease; }
+.form-group input:focus, .form-group select:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+/* ── 多选下拉（错误类型筛选）── */
 .ms-wrap { position:relative; }
-.ms-btn { padding:8px 12px; border:1px solid #dfe6e9; border-radius:6px; font-size:14px; background:#fff; cursor:pointer; min-width:170px; text-align:left; color:#2d3436; }
-.ms-btn:hover { border-color:#0d6efd; }
-.ms-panel { display:none; position:absolute; top:100%; left:0; margin-top:4px; background:#fff; border:1px solid #dfe6e9; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12); padding:6px 0; min-width:190px; z-index:60; max-height:260px; overflow:auto; }
-.ms-item { display:flex; align-items:center; gap:8px; padding:7px 12px; font-size:13px; cursor:pointer; white-space:nowrap; }
-.ms-item:hover { background:#f7f9fc; }
-.ms-item input { min-width:auto !important; width:14px; height:14px; }
-.ms-all { border-bottom:1px solid #eef1f4; margin-bottom:4px; padding-bottom:9px; font-weight:600; }
-.btn-query { padding:8px 28px; background:#0d6efd; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
-.btn-export { padding:8px 28px; background:#12b886; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
-.btn-save { padding:8px 28px; background:#f77f00; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
-.chip { padding:4px 12px; border:1px solid #dfe6e9; border-radius:14px; background:#fff; cursor:pointer; font-size:13px; color:#6b7280; }
-.chip.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
-.loading { display:none; align-items:center; gap:8px; color:#6b7280; margin-top:8px; }
-.spinner { width:16px; height:16px; border:2px solid #dfe6e9; border-top-color:#0d6efd; border-radius:50%; animation:spin .6s linear infinite; }
+.ms-btn { padding:8px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); font-size:14px; background:var(--surface); cursor:pointer; min-width:170px; text-align:left; color:var(--ink); }
+.ms-btn:hover { border-color:var(--accent); }
+.ms-panel { display:none; position:absolute; top:100%; left:0; margin-top:6px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); box-shadow:0 8px 24px rgba(20,28,25,.10); padding:6px 0; min-width:190px; z-index:60; max-height:260px; overflow:auto; }
+.ms-item { display:flex; align-items:center; gap:8px; padding:8px 12px; font-size:13px; cursor:pointer; white-space:nowrap; }
+.ms-item:hover { background:var(--surface-2); }
+.ms-item input { min-width:auto !important; width:14px; height:14px; accent-color:var(--accent); }
+.ms-all { border-bottom:1px solid var(--line); margin-bottom:4px; padding-bottom:9px; font-weight:600; }
+.btn-query, .btn-export, .btn-save { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 20px; height:36px; border:1px solid transparent; border-radius:var(--r-sm); font-size:14px; cursor:pointer; transition:background-color .12s ease,border-color .12s ease,color .12s ease; }
+/* 三个操作按钮各用一色：查询=主色蓝，导出=绿，更新/保存=橙（2026-11-11 hunter 定） */
+.btn-query { background:var(--accent); color:#fff; }
+.btn-query:hover { background:var(--accent-ink); }
+.btn-export { background:var(--btn-export); color:#fff; }
+.btn-export:hover { background:var(--btn-export-ink); }
+.btn-save { background:var(--btn-save); color:#fff; }
+.btn-save:hover { background:var(--btn-save-ink); }
+.btn-query svg, .btn-export svg, .btn-save svg { width:15px; height:15px; stroke-width:1.6; flex:0 0 15px; }
+.chip { padding:4px 12px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface); cursor:pointer; font-size:13px; color:var(--ink-2); }
+.chip.active { background:var(--accent-soft); color:#0a7a7a; border-color:rgba(19,194,194,.45); }
+.loading { display:none; align-items:center; gap:8px; color:var(--ink-2); margin-top:8px; }
+.spinner { width:14px; height:14px; border:2px solid var(--line-2); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-.error { color:#d63031; padding:12px 16px; background:#ffeaa7; border-radius:8px; margin-top:12px; display:none; }
+.error { color:var(--danger); padding:12px 16px; background:var(--danger-soft); border:1px solid rgba(178,51,43,.18); border-radius:var(--r-md); margin-top:12px; display:none; }
 
 /* ── 数据区 ── */
-.body { flex:1; overflow:hidden; padding:16px 18px; display:flex; flex-direction:column; }
-.table-wrap { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); overflow:hidden; flex:1; min-height:0; display:flex; flex-direction:column; }
+.body { flex:1; overflow:hidden; padding:20px; display:flex; flex-direction:column; }
+.table-wrap { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; flex:1; min-height:0; display:flex; flex-direction:column; }
 .table-scroll { flex:1; overflow:auto; min-height:0; }
-table { width:100%; border-collapse:collapse; font-size:13px; }
-thead { background:#f7f9fc; }
-th { padding:10px 12px; text-align:left; font-weight:600; color:#6b7280; border-bottom:2px solid #e3e8ee; white-space:nowrap; position:sticky; top:0; background:#f7f9fc; z-index:2; }
-td { padding:8px 12px; text-align:left; border-bottom:1px solid #f1f2f6; }
-tr:hover td { background:#f7f9fc; }
-.empty { padding:40px; text-align:center; color:#b2bec3; }
-.pagination { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#f8f9fa; border-top:1px solid #dfe6e9; flex:0 0 auto; }
-.page-btn { padding:4px 12px; border:1px solid #dfe6e9; border-radius:4px; background:#fff; cursor:pointer; font-size:13px; }
-.page-btn:disabled { opacity:.4; cursor:default; }
+table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+thead { background:var(--surface-2); }
+th { padding:10px 12px; text-align:left; font-weight:500; color:var(--ink-2); font-size:12.5px; border-bottom:1px solid var(--line-2); white-space:nowrap; position:sticky; top:0; background:var(--surface-2); z-index:2; }
+td { padding:9px 12px; text-align:left; border-bottom:1px solid var(--line); color:var(--ink); }
+tbody tr:hover td { background:var(--surface-2); }
+.empty { padding:48px 24px; text-align:center; color:var(--ink-3); }
+.pagination { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--surface-2); border-top:1px solid var(--line); flex:0 0 auto; }
+.page-btn { padding:5px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); background:var(--surface); cursor:pointer; font-size:13px; color:var(--ink); }
+.page-btn:hover:not(:disabled) { background:var(--surface-3); }
+.page-btn:disabled { opacity:.45; cursor:default; }
 .col-text { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .col-wrap { max-width:560px; white-space:normal; word-break:break-word; line-height:1.5; vertical-align:top; }
-.qmark { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; background:#dfe6e9; color:#6b7280; font-size:11px; font-weight:700; cursor:help; margin-left:5px; vertical-align:middle; }
-.qmark:hover { background:#0d6efd; color:#fff; }
-.tip-pop { position:fixed; background:#fff; border:1px solid #dfe6e9; box-shadow:0 3px 10px rgba(0,0,0,.14); border-radius:6px; padding:8px 10px; font-size:12px; color:#2d3436; z-index:99999; max-width:280px; line-height:1.7; }
+.qmark { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; background:var(--surface-3); color:var(--ink-2); font-size:11px; font-weight:500; cursor:help; margin-left:6px; vertical-align:middle; }
+.qmark:hover { background:var(--accent-soft); color:var(--accent-ink); }
+.tip-pop { position:fixed; background:var(--ink); color:#fff; box-shadow:0 8px 24px rgba(20,28,25,.18); border-radius:var(--r-sm); padding:8px 10px; font-size:12px; z-index:99999; max-width:280px; line-height:1.6; }
+
+/* ── 焦点与动效 ── */
+:focus-visible { outline:none; box-shadow:var(--focus); }
+button:focus-visible, input:focus-visible, select:focus-visible, .item:focus-visible, .page-btn:focus-visible { outline:none; box-shadow:var(--focus); }
+@media (prefers-reduced-motion: reduce) { * { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+
+/* ── 窄屏：侧栏改浮层，查询区自动换行 ── */
+@media (max-width: 1024px) {
+  .sidebar { position:fixed; left:0; top:0; bottom:0; z-index:80; box-shadow:0 12px 32px rgba(20,28,25,.18); }
+  .body { padding:16px; }
+  .query-box { padding:12px 16px; }
+}
+@media (max-width: 720px) {
+  .form-group input, .form-group select, .ms-btn { min-width:140px; }
+  .crumb-note { display:none; }
+  .body { padding:12px; }
+}
 </style>
 </head>
 <body>
 <div class="app">
   <aside id="sidebar" class="sidebar">
-    <div class="side-head">🦞 SHB 数据</div>
+    <div class="side-head"><svg class="brand-mark" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="3" width="2.5" height="14" rx="1.25" fill="currentColor"/><rect x="8.75" y="3" width="2.5" height="9" rx="1.25" fill="currentColor" opacity=".55"/><rect x="14.5" y="3" width="2.5" height="5" rx="1.25" fill="currentColor" opacity=".3"/></svg><span>SHB 数据</span></div>
     <nav class="menu" id="menu"></nav>
     <div class="side-foot">
       <span class="avatar">{{ (current_user or '?')[0] }}</span>
@@ -103,7 +153,7 @@ tr:hover td { background:#f7f9fc; }
 
   <main class="main">
     <div class="topbar">
-      <button id="toggleBtn" class="icon-btn" title="收起侧边栏">☰</button>
+      <button id="toggleBtn" class="icon-btn" title="收起侧边栏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
       <div class="crumb" id="pageTitle"></div>
       <div class="crumb-note" id="tabNote"></div>
       <div id="wpTabs" style="display:none;align-items:center;gap:6px">
@@ -135,8 +185,8 @@ tr:hover td { background:#f7f9fc; }
             <option value="4">4</option>
           </select>
         </div>
-        <button class="btn-query" onclick="doSearch()">🔍 查询</button>
-        <button class="btn-export" id="export-btn" onclick="doExport()" style="display:none">📥 导出 CSV</button>
+        <button class="btn-query" onclick="doSearch()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>查询</button>
+        <button class="btn-export" id="export-btn" onclick="doExport()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV</button>
       </div>
       <div class="form-row" id="form-row-custom" style="display:none"></div>
       <div id="person-bar" style="display:none;margin-top:10px"></div>
@@ -153,7 +203,7 @@ tr:hover td { background:#f7f9fc; }
               <option value="executing">执行中</option>
             </select>
           </div>
-          <button class="btn-query" onclick="fetchAudit()">🔍 刷新日志</button>
+          <button class="btn-query" onclick="fetchAudit()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>刷新日志</button>
         </div>
       </div>
       <div class="loading" id="loading"><div class="spinner"></div><span>查询中...</span></div>
@@ -192,7 +242,15 @@ if (userTabs && userTabs.length) currentTab = (userTabs.indexOf('bk_overview') >
 const AUDIT_KEY = '__audit__';
 const GROUP_ORDER = ['概览', '工单', '客户', '在线报表', '本地报表', '系统'];
 // 分组标题图标（只加在分组上，Tab 项不加）
-const GROUP_ICONS = {'概览': '📊', '工单': '🧾', '客户': '🤝', '在线报表': '🌐', '本地报表': '📈', '系统': '⚙️'};
+const _svgIco = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+const GROUP_ICONS = {
+  '概览': _svgIco('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  '工单': _svgIco('<path d="M14 3v5h5"/><path d="M19 8.5V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h8z"/><path d="M8 13h8M8 17h5"/>'),
+  '客户': _svgIco('<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.5a3 3 0 0 1 0 5M18 20a6 6 0 0 0-2-4.5"/>'),
+  '在线报表': _svgIco('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/>'),
+  '本地报表': _svgIco('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
+  '系统': _svgIco('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>')
+};
 function groupOf(key) {
   if (key.slice(0, 3) === 'ol:') return '在线报表';              // 在线报表（云端实时）
   if (key === 'bk_overview') return '概览';
@@ -420,12 +478,12 @@ function buildResultForm(tab) {
       html += '<div class="form-group"><label style="display:flex;align-items:center;gap:2px">' + esc(f.label) + _tip + '</label>' + _inp + '</div>';
     }
   });
-  html += '<button class="btn-query" id="btn-search-res" onclick="doSearch()">🔍 查询</button>';
+  html += '<button class="btn-query" id="btn-search-res" onclick="doSearch()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>查询</button>';
   if (isAdmin && !NO_EXPORT[tab]) {
-    html += '<button class="btn-export" onclick="doExport()">📥 导出 Excel</button>';
+    html += '<button class="btn-export" onclick="doExport()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel</button>';
   }
   if (!isOl && isAdmin && !NO_SAVE[tab]) {
-    const _saveTxt = (tab === 'trip' || tab === 'progress') ? '💾 更新' : (tab === 'workload' ? '🔄 更新' : '💾 保存');
+    const _saveTxt = (tab === 'trip' || tab === 'progress') ? '更新' : (tab === 'workload' ? '更新' : '保存');
     html += '<button class="btn-save" id="btn-save-res" onclick="doSave()">' + _saveTxt + '</button>';
   }
   box.innerHTML = html;
@@ -524,12 +582,12 @@ async function doSave() {
   try {
     const resp = await fetch('/shb/api/save?' + params.toString(), {method:'POST'});
     const d = await resp.json();
-    if (!d.ok) { ACTIVE_JOBS[tab] = {text:'❌ ' + (d.error || '保存失败')}; updateJobBox(); return; }
-    ACTIVE_JOBS[tab] = {id: d.job_id, text:'⏳ 已开始保存，等待完成...'};
+    if (!d.ok) { ACTIVE_JOBS[tab] = {text:'' + (d.error || '保存失败')}; updateJobBox(); return; }
+    ACTIVE_JOBS[tab] = {id: d.job_id, text:'已开始保存，等待完成...'};
     updateJobBox();
     setSaveButtons(true);
     pollJob(d.job_id, tab);
-  } catch(e) { ACTIVE_JOBS[tab] = {text:'❌ 网络错误：' + e.message}; updateJobBox(); }
+  } catch(e) { ACTIVE_JOBS[tab] = {text:'网络错误：' + e.message}; updateJobBox(); }
 }
 
 async function pollJob(id, tab) {
@@ -537,20 +595,20 @@ async function pollJob(id, tab) {
     await new Promise(r => setTimeout(r, 3000));
     let d;
     try { d = await (await fetch('/shb/api/job?id=' + id)).json(); }
-    catch(e) { ACTIVE_JOBS[tab] = {id: id, text:'❌ 任务状态查询失败：' + e.message}; updateJobBox(); setSaveButtons(false); return; }
-    if (!d.ok) { ACTIVE_JOBS[tab] = {id: id, text:'❌ ' + (d.error || '任务丢失')}; updateJobBox(); setSaveButtons(false); return; }
+    catch(e) { ACTIVE_JOBS[tab] = {id: id, text:'任务状态查询失败：' + e.message}; updateJobBox(); setSaveButtons(false); return; }
+    if (!d.ok) { ACTIVE_JOBS[tab] = {id: id, text:'' + (d.error || '任务丢失')}; updateJobBox(); setSaveButtons(false); return; }
     if (d.status === 'ok') {
-      ACTIVE_JOBS[tab] = {id: id, text:'✅ 保存完成' + (d.output ? '：' + d.output.replace(/\n/g,' | ') : '')};
+      ACTIVE_JOBS[tab] = {id: id, text:'保存完成' + (d.output ? '：' + d.output.replace(/\n/g,' | ') : '')};
       updateJobBox(); setSaveButtons(false);
       if (currentTab === tab) doSearch();
       return;
     }
     if (d.status === 'failed') {
-      ACTIVE_JOBS[tab] = {id: id, text:'❌ 保存失败' + (d.error ? '：' + d.error : '')};
+      ACTIVE_JOBS[tab] = {id: id, text:'保存失败' + (d.error ? '：' + d.error : '')};
       updateJobBox(); setSaveButtons(false);
       return;
     }
-    ACTIVE_JOBS[tab] = {id: id, text:'⏳ 正在保存（' + (d.status === 'queued' ? '排队中' : '运行中') + '）...'};
+    ACTIVE_JOBS[tab] = {id: id, text:'正在保存（' + (d.status === 'queued' ? '排队中' : '运行中') + '）...'};
     updateJobBox();
   }
 }
@@ -653,7 +711,7 @@ async function fetchOnline() {
   const box = document.getElementById('job-status');
   loading.style.display = 'flex'; error.style.display = 'none'; tc.innerHTML = '';
   pg.style.display = 'none';
-  if (box) { box.style.display = ''; box.textContent = '⏳ 正在提交云端查询…'; }
+  if (box) { box.style.display = ''; box.textContent = '正在提交云端查询…'; }
   try {
     const resp = await fetch('/shb/api/online-query?tab=' + encodeURIComponent(currentTab), {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -672,7 +730,7 @@ async function fetchOnline() {
       try { d = await (await fetch('/shb/api/job?id=' + jobId)).json(); }
       catch(e) { throw new Error('任务状态查询失败：' + e.message); }
       if (!d.ok) throw new Error(d.error || '任务丢失');
-      if (box) box.textContent = '⏳ ' + (d.progress || '查询中') + '…';
+      if (box) box.textContent = '' + (d.progress || '查询中') + '…';
       if (d.status === 'ok') {
         loading.style.display = 'none'; if (box) box.style.display = 'none';
         LAST_ONLINE[currentTab] = d.result;
@@ -905,13 +963,13 @@ async function doExportExcel(baseParams) {
   box.style.display = '';
   try {
     if (typeof XLSX === 'undefined') {
-      box.textContent = '⏳ 正在加载导出组件...';
+      box.textContent = '正在加载导出组件...';
       await ensureXlsx();
     }
-    box.textContent = '⏳ 正在生成 Excel...';
+    box.textContent = '正在生成 Excel...';
     const tab = currentTab;
     const { cols, rows } = await fetchAllRows(tab, tab === 'trip' ? new URLSearchParams() : baseParams);
-    if (!rows.length) { box.textContent = '⚠️ 当前条件下没有数据可导出'; return; }
+    if (!rows.length) { box.textContent = '当前条件下没有数据可导出'; return; }
     const wb = XLSX.utils.book_new();
     if (tab === 'trip') {
       const byName = {};
@@ -933,9 +991,9 @@ async function doExportExcel(baseParams) {
     const stamp = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
     const fname = (tab === 'trip' ? '行程单_' : (tab === 'workload' ? '服务人员工作量_' : (tab === 'progress2' ? '项目进度2_' : '项目进度_'))) + stamp + '.xlsx';
     XLSX.writeFile(wb, fname);
-    box.textContent = '✅ 已生成 ' + fname + '（' + rows.length + ' 行' + (tab === 'trip' ? '，按人分页签' : '') + '）';
+    box.textContent = '已生成 ' + fname + '（' + rows.length + ' 行' + (tab === 'trip' ? '，按人分页签' : '') + '）';
   } catch (e) {
-    box.textContent = '❌ 导出失败：' + e.message;
+    box.textContent = '导出失败：' + e.message;
   }
 }
 
@@ -975,7 +1033,7 @@ async function fetchWeeklyResult(week, mode, keyword) {
     if (!d.ok) throw new Error(d.error || '任务丢失');
     if (box && d.status !== 'ok') {
       box.style.display = '';
-      box.textContent = '⏳ ' + (mode === 'plan' ? '周计划' : '周总结') + '：' + (d.progress || '查询中') + '…';
+      box.textContent = '' + (mode === 'plan' ? '周计划' : '周总结') + '：' + (d.progress || '查询中') + '…';
     }
     if (d.status === 'ok') return d.result;
     if (d.status === 'failed') throw new Error(d.error || '查询失败');
@@ -992,7 +1050,7 @@ async function doExportOnline() {
                 'ol:weekly-plan':'周计划（在线）'}[currentTab] || '在线报表';
   try {
     if (typeof XLSX === 'undefined') {
-      if (box) { box.style.display = ''; box.textContent = '⏳ 正在加载导出组件...'; }
+      if (box) { box.style.display = ''; box.textContent = '正在加载导出组件...'; }
       await ensureXlsx();
     }
     const wb = XLSX.utils.book_new();
@@ -1001,7 +1059,7 @@ async function doExportOnline() {
     if (currentTab === 'ol:weekly-plan') {
       const week = ((document.getElementById('olw_week') || {}).value) || _isoDate(new Date());
       const kw = ((document.getElementById('olw_person') || {}).value || '').trim();
-      if (box) { box.style.display = ''; box.textContent = '⏳ 正在生成周计划 / 周总结…'; }
+      if (box) { box.style.display = ''; box.textContent = '正在生成周计划 / 周总结…'; }
       const [p, s] = await Promise.all([fetchWeeklyResult(week, 'plan', kw),
                                         fetchWeeklyResult(week, 'summary', kw)]);
       _appendSheet(wb, '周计划', p);
@@ -1012,7 +1070,7 @@ async function doExportOnline() {
     } else {
       const data = LAST_ONLINE[currentTab];
       if (!data || !data.rows || !data.rows.length) {
-        if (box) { box.style.display = ''; box.textContent = '⚠️ 请先查询出结果再导出'; }
+        if (box) { box.style.display = ''; box.textContent = '请先查询出结果再导出'; }
         return;
       }
       const cols = data.columns || [];
@@ -1036,9 +1094,9 @@ async function doExportOnline() {
     const stamp = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
     const fname = base + '_' + stamp + '.xlsx';
     XLSX.writeFile(wb, fname);
-    if (box) { box.style.display = ''; box.textContent = '✅ 已生成 ' + fname + '（' + rowsHint + ' 行）'; }
+    if (box) { box.style.display = ''; box.textContent = '已生成 ' + fname + '（' + rowsHint + ' 行）'; }
   } catch (e) {
-    if (box) { box.style.display = ''; box.textContent = '❌ 导出失败：' + e.message; }
+    if (box) { box.style.display = ''; box.textContent = '导出失败：' + e.message; }
   }
 }
 
@@ -1139,7 +1197,7 @@ function renderSyncTable(tasks) {
     }
     const last = t.last ? (esc(t.last.time||'')+' <span style="color:'+(t.last.status==='ok'?'#00b894':'#d63031')+';font-weight:600">'+esc(t.last.status||'')+'</span>') : '<span style="color:#999">从未</span>';
     const btn = t.running
-      ? '<span style="color:#0d6efd">⏳ 运行中…</span>'
+      ? '<span style="color:#0d6efd">运行中…</span>'
       : '<button class="btn-save" onclick="runSync(\''+t.key+'\')">▶ 运行</button>';
     html += '<tr><td><b>'+esc(t.title)+'</b></td><td class="col-text">'+esc(t.desc)+'</td><td>'+param+
             '</td><td class="col-text">'+esc(t.writes)+'</td><td class="col-text">'+last+'</td><td>'+btn+'</td></tr>';
@@ -1243,7 +1301,7 @@ function switchToIdentity() {
 
 const ID_HELP_HTML = [
   '<div style="margin:8px 16px 24px;border:1px solid #dfe6e9;border-radius:8px;background:#fbfcfd">',
-  '  <div style="padding:10px 14px;border-bottom:1px solid #eef2f5;font-weight:600;color:#2d3436;font-size:14px">📖 使用说明</div>',
+  '  <div style="padding:10px 14px;border-bottom:1px solid #eef2f5;font-weight:600;color:#2d3436;font-size:14px">使用说明</div>',
   '  <div style="display:flex;flex-wrap:wrap;gap:24px;padding:14px">',
   '    <div style="flex:1 1 320px;min-width:280px">',
   '      <div style="font-weight:600;color:#0984e3;margin-bottom:6px;font-size:13px">切换身份</div>',
@@ -1287,7 +1345,7 @@ async function fetchIdentity() {
     html += '<table><thead><tr><th>身份标识</th><th>显示名</th><th>最后登录</th><th>当前</th><th>操作</th></tr></thead><tbody>';
     d.rows.forEach(r => {
       const cur = r['当前'] === '★';
-      html += '<tr><td class="col-text">' + esc(r.profile) + '</td><td>' + esc(r['显示名']) + '</td><td>' + esc(r['最后登录']) + '</td><td>' + (cur ? '★' : '') + '</td><td>';
+      html += '<tr><td class="col-text">' + esc(r.profile) + '</td><td>' + esc(r['显示名']) + '</td><td>' + esc(r['最后登录']) + '</td><td>' + (cur ? '✓' : '') + '</td><td>';
       if (cur) {
         html += '—';
       } else {
@@ -1310,17 +1368,17 @@ async function fetchIdentity() {
 async function idSwitch(profile, skipConfirm) {
   if (!skipConfirm && !confirm('切换后，所有查询、同步、定时任务都将使用「' + profile + '」的身份运行。确定切换？')) return;
   const msg = document.getElementById('id-msg');
-  if (msg) msg.textContent = '⏳ 正在探测并切换...';
+  if (msg) msg.textContent = '正在探测并切换...';
   try {
     const d = await (await fetch('/shb/api/identity/switch', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({profile: profile})
     })).json();
-    if (d.ok && d.status === 'switched') { if (msg) msg.textContent = '✅ 已切换到 ' + d.current; fetchIdentity(); return; }
-    if (d.ok && d.status === 'already') { if (msg) msg.textContent = 'ℹ️ 已是当前身份'; return; }
+    if (d.ok && d.status === 'switched') { if (msg) msg.textContent = '已切换到 ' + d.current; fetchIdentity(); return; }
+    if (d.ok && d.status === 'already') { if (msg) msg.textContent = 'ℹ 已是当前身份'; return; }
     if (d.ok && d.status === 'need_auth') {
       if (msg) {
-        msg.innerHTML = '⚠️ ' + esc(d.message) + '　';
+        msg.innerHTML = '' + esc(d.message) + '　';
         const b = document.createElement('button');
         b.className = 'btn-save'; b.textContent = '立即生成授权链接';
         b.onclick = () => idAuth(profile);
@@ -1328,22 +1386,22 @@ async function idSwitch(profile, skipConfirm) {
       }
       return;
     }
-    if (msg) msg.textContent = '❌ ' + (d.error || '切换失败');
-  } catch(e) { if (msg) msg.textContent = '❌ 网络错误：' + e.message; }
+    if (msg) msg.textContent = '' + (d.error || '切换失败');
+  } catch(e) { if (msg) msg.textContent = '网络错误：' + e.message; }
 }
 
 async function idAuth(profile) {
   const msg = document.getElementById('id-msg'), linkBox = document.getElementById('id-link');
-  if (msg) msg.textContent = '⏳ 正在生成授权链接...';
+  if (msg) msg.textContent = '正在生成授权链接...';
   if (linkBox) linkBox.innerHTML = '';
   try {
     const d = await (await fetch('/shb/api/identity/authlink', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({profile: profile})
     })).json();
-    if (!d.ok) { if (msg) msg.textContent = '❌ ' + (d.error || '生成失败'); return; }
-    if (!d.url) { if (msg) msg.textContent = '❌ 未取到链接，请稍后重试'; return; }
-    if (msg) msg.textContent = '✅ 链接已生成，仅发给本人，约 30 分钟内有效';
+    if (!d.ok) { if (msg) msg.textContent = '' + (d.error || '生成失败'); return; }
+    if (!d.url) { if (msg) msg.textContent = '未取到链接，请稍后重试'; return; }
+    if (msg) msg.textContent = '链接已生成，仅发给本人，约 30 分钟内有效';
     if (linkBox) {
       const a = document.createElement('a');
       a.href = d.url; a.target = '_blank'; a.textContent = d.url;
@@ -1358,7 +1416,7 @@ async function idAuth(profile) {
       linkBox.appendChild(cb);
     }
     idPoll(profile);
-  } catch(e) { if (msg) msg.textContent = '❌ 网络错误：' + e.message; }
+  } catch(e) { if (msg) msg.textContent = '网络错误：' + e.message; }
 }
 
 async function idPoll(profile) {
@@ -1368,14 +1426,14 @@ async function idPoll(profile) {
     let d;
     try {
       d = await (await fetch('/shb/api/identity/authstatus?profile=' + encodeURIComponent(profile))).json();
-    } catch(e) { if (msg) msg.textContent = '❌ 状态查询失败：' + e.message; return; }
+    } catch(e) { if (msg) msg.textContent = '状态查询失败：' + e.message; return; }
     if (!d.ok) return;
     if (d.status === 'waiting') {
-      if (msg) msg.textContent = '⏳ 等待本人确认授权（已 ' + (d.elapsed || 0) + ' 秒）...';
+      if (msg) msg.textContent = '等待本人确认授权（已 ' + (d.elapsed || 0) + ' 秒）...';
       continue;
     }
     if (d.status === 'success') {
-      if (msg) msg.textContent = '✅ 授权成功，正在切换身份...';
+      if (msg) msg.textContent = '授权成功，正在切换身份...';
       await idSwitch(profile, true);
       return;
     }
@@ -1396,7 +1454,7 @@ async function idCancel(profile) {
     });
     if (msg) msg.textContent = '已取消等待';
     if (linkBox) linkBox.innerHTML = '';
-  } catch(e) { if (msg) msg.textContent = '❌ 取消失败：' + e.message; }
+  } catch(e) { if (msg) msg.textContent = '取消失败：' + e.message; }
 }
 
 function switchToTab(tab) {
@@ -1412,7 +1470,7 @@ function switchToTab(tab) {
   document.getElementById('audit-filter').style.display = 'none';
   const eb = document.getElementById('export-btn');
   eb.style.display = (userTabs && userTabs.includes(tab) && !isOverview && !NO_EXPORT[tab]) ? '' : 'none';
-  eb.textContent = isRes ? '📥 导出 Excel' : '📥 导出 CSV';
+  eb.innerHTML = (isRes ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV');
   updateJobBox();
   if (tab !== 'trip') renderPersonBar(null);
   currentTab = tab; currentPage = 1; renderMenu(); doSearch();
@@ -1612,7 +1670,7 @@ document.getElementById('table-container').innerHTML = '<div class="empty">输�
 document.getElementById('pagination').style.display = 'none';
 const _eb = document.getElementById('export-btn');
 _eb.style.display = (isAdmin && currentTab !== 'bk_overview' && !NO_EXPORT[currentTab]) ? '' : 'none';
-_eb.textContent = RESULT_FORMS[currentTab] ? '📥 导出 Excel' : '📥 导出 CSV';
+_eb.innerHTML = (RESULT_FORMS[currentTab] ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV');
 </script>
 </body>
 </html>
