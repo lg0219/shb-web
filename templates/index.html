@@ -342,7 +342,7 @@ const ACCEPT_NOTE = '说明：关键字按项目编号、项目名称、工单�
 // 服务人员工作量说明（本地版 + 在线版）
 const WORKLOAD_NOTE = '说明：每天到场/离场都要打卡；工时按「到场→下一次离场」配对、按天累加，跨天不拆分；同一天多次签到取最早/最晚；\n只缺到场：用「到达时间」代替或用 9:00 计算；只缺离场：按当天 17:00 计算；到场离场都缺的，不计工时。有兜底计算的行，工时标红可点击查看原因。';
 // 稽核检查（在线）说明
-const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月；重复工单=同客户同类型工单超过 1 单（工程/预调试/调试/验收/保运），涉及人员取建单人；\n未签到=已开始工单按参与人（协同人+实际签到人）检查到场/离场打卡；计划日期未填=计划开始/结束时间缺失，涉及人员取负责人。';
+const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月；重复工单=同客户同类型工单超过 1 单（工程/预调试/调试/验收/保运），涉及人员取建单人；\n漏打卡=已开始工单按参与人（协同人+实际签到人）检查到场/离场打卡；计划日期未填=计划开始/结束时间缺失，涉及人员取负责人；\n验收整改=验收工单「是否合格」为不合格且整改内容子表单为空，涉及人员取负责人（工单未分配则跳过）。';
 const TAB_NOTES = {'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
@@ -383,7 +383,7 @@ const ONLINE_FORMS = {
   ],
   'ol:audit-check': [
     {id:'olaud_kw', label:'姓名', ph:'涉及人员姓名（可空）', param:'keyword'},
-    {id:'olaud_type', label:'错误类型', type:'multiselect', param:'types', options:['重复工单','未签到','计划日期未填']},
+    {id:'olaud_type', label:'错误类型', type:'multiselect', param:'types', options:['重复工单','漏打卡','计划日期未填','验收整改']},
     {id:'olaud_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单创建时间'},
     {id:'olaud_end', label:'日期至', type:'date', param:'date_end', tip:'工单创建时间'}
   ]
@@ -699,10 +699,17 @@ function renderResultData(data) {
   const _rawCells = !!data.html_cells;
   let html = '<table><thead><tr>' + cols.map((c, ci) => {
     let _th = _rawCells ? c : esc(c);
+    // 保运进度（2026-11-11 hunter 定）：11 项检查标题太长（如“1、检查控制系统是否显示正常”），
+    // 表头只显示序号数字，完整标题放到 th 的 title 上，鼠标悬停可见；导出 Excel 仍用完整标题。
+    let _thTitle = '';
+    if (currentTab === 'ol:maintain-progress') {
+      const _m = /^(\d+)、/.exec(c);
+      if (_m) { _th = _m[1]; _thTitle = ' title="' + esc(c) + '"'; }
+    }
     if ((currentTab === 'trip' || currentTab === 'ol:trip') && c === '工作内容') {
       _th += '<span class="qmark" title="' + esc(TRIP_WORK_TIP) + '">?</span>';
     }
-    return '<th' + (_rawCells && ci === 0 ? ' style="text-align:center"' : '') + '>' + _th + '</th>';
+    return '<th' + _thTitle + (_rawCells && ci === 0 ? ' style="text-align:center"' : '') + '>' + _th + '</th>';
   }).join('') + '</tr></thead><tbody>';
   data.rows.forEach(row => { html += '<tr>' + cols.map((c, ci) => {
     const _v = row[c] == null ? '' : row[c];
@@ -712,6 +719,17 @@ function renderResultData(data) {
     }
     if (c === '工单时长' && row.__warn) {
       return '<td title="'+esc(_v)+'" class="col-text" style="color:#d63031;cursor:pointer" onclick="showTip(event,this,'+JSON.stringify(String(row.__tips||'')).replace(/"/g,'&quot;')+')">'+esc(_v)+'</td>';
+    }
+    // 保运进度（2026-11-11 hunter 定）：单元格值等于「有误」或「未完成」时红字提示（整格文字变红，其他值不变）
+    if (currentTab === 'ol:maintain-progress') {
+      const _vt = String(_v).trim();
+      if (_vt === '有误' || _vt === '未完成') {
+        return '<td title="'+esc(_v)+'" class="col-text" style="color:#d63031;font-weight:600">'+esc(_v)+'</td>';
+      }
+    }
+    // 验收进度（2026-11-11 hunter 定）：「是否合格」列值精确等于「不合格」→ 红字加粗（该值固定，不做包含匹配）
+    if (currentTab === 'ol:accept-progress' && c === '是否合格' && String(_v).trim() === '不合格') {
+      return '<td title="'+esc(_v)+'" class="col-text" style="color:#d63031;font-weight:600">'+esc(_v)+'</td>';
     }
     return '<td title="'+esc(_v)+'" class="col-text">'+esc(_v)+'</td>';
   }).join('') + '</tr>'; });

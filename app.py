@@ -147,9 +147,11 @@ ONLINE_TABS = {
     "ol:audit-check": "稽核检查（在线）",
 }
 ONLINE_CACHE_TTL = 1800  # 在线报表结果缓存 30 分钟（2026-11-10 hunter 定）
-# 不缓存的在线报表（2026-11-11）：保运进度含「暂存」数据，暂存随时变，
-# 30 分钟缓存会让用户刚暂存完查不到 → 改为每次实时取数。
-ONLINE_NO_CACHE = {"ol:maintain-progress"}
+# 不缓存的在线报表：当前为空（2026-11-11 hunter 定）。
+# 变更：保运进度原因「含暂存数据、担心刚暂存完查不到」被排除缓存，
+# 现改为与其他在线报表一致的 30 分钟缓存（缓存键含 keyword 与日期参数，不同查询互不覆盖）。
+# 若将来某张表需要实时取数，把 tab 名加进这个集合即可。
+ONLINE_NO_CACHE = set()
 
 # ══ 系统 Tab（对照表等）2026-10-08 ══
 SYSTEM_TITLES = {"fieldmap": "数据字典", "sync": "同步中心", "synclog": "同步日志",
@@ -2202,9 +2204,15 @@ def _online_week_monday(s):
 _ONLINE_KEYWORD_COL = {"ol:weekly-plan": "负责人", "ol:trip": "姓名"}
 
 
-def _online_filter(tab, resp, keyword):
-    """在全员结果上按关键字过滤行（只对能行过滤的报表生效）"""
-    if not keyword or not resp:
+def _online_filter(tab, resp, keyword, types=""):
+    """在全员结果上按关键字 / 错误类型过滤行（只对能行过滤的报表生效）
+
+    2026-11-11 hunter 定：稽核检查的「错误类型」（types）**不参与取数、不进缓存键**，
+    改在这里做行过滤——切换错误类型直接命中缓存，不再重查云端。
+    """
+    if not resp:
+        return resp
+    if not keyword and not (tab == "ol:audit-check" and types):
         return resp
     col = _ONLINE_KEYWORD_COL.get(tab)
     if col:
@@ -2221,8 +2229,12 @@ def _online_filter(tab, resp, keyword):
                 or keyword in str(r.get("服务人员") or "")
                 or keyword in str(r.get("工单类型") or "")]
     elif tab == "ol:audit-check":
-        rows = [r for r in (resp.get("rows") or [])
-                if keyword in str(r.get("涉及人员") or "")]
+        rows = resp.get("rows") or []
+        if types:
+            _ts = [x.strip() for x in types.split(",") if x.strip()]
+            rows = [r for r in rows if r.get("错误类型") in _ts]
+        if keyword:
+            rows = [r for r in rows if keyword in str(r.get("涉及人员") or "")]
     elif tab == "ol:debug-progress":
         keys = ("项目编码", "客户名称", "调试人员", "调试内容")
         rows = [r for r in (resp.get("rows") or [])
@@ -2237,7 +2249,7 @@ def _online_filter(tab, resp, keyword):
     return out
 
 
-def _online_worker(job_id, tab, params, cache_key, keyword=""):
+def _online_worker(job_id, tab, params, cache_key, keyword="", types=""):
     j = RESULT_JOBS.get(job_id)
     if not j:
         return
@@ -2249,7 +2261,7 @@ def _online_worker(job_id, tab, params, cache_key, keyword=""):
         resp = shb_online.query(tab, params, progress=_prog)
         if cache_key:
             _cache_set(cache_key, resp, ONLINE_CACHE_TTL)   # 缓存全量（不带姓名过滤）
-        j["result"] = _online_filter(tab, resp, keyword)
+        j["result"] = _online_filter(tab, resp, keyword, types)
         j["status"] = "ok"
         j["progress"] = "完成（%s 秒，%d 行）" % (resp.get("elapsed", "?"), len(resp.get("rows") or []))
     except Exception as e:
@@ -2274,6 +2286,7 @@ def api_online_query():
     if not isinstance(params, dict):
         params = {}
     keyword = (params.get("keyword") or "").strip()
+    types = (params.get("types") or "").strip()   # 稽核检查：错误类型（只做结果行过滤）
     base = dict(params)
     base.pop("keyword", None)
     if tab in ("ol:progress2", "ol:debug-progress", "ol:maintain-progress", "ol:accept-progress"):
@@ -2285,13 +2298,17 @@ def api_online_query():
         base["week_start"] = _online_week_monday(base.get("week_start"))
     if tab == "ol:debug-progress":
         pass  # 关键字已进 base（2026-11-11 改：参与取数，不再只做结果行过滤）
+    if tab == "ol:audit-check":
+        # 2026-11-11 hunter 定：错误类型不参与取数、不进缓存键（后端本来就先取全量再按类型过滤），
+        # 改由 _online_filter 做行过滤 → 切换错误类型直接命中缓存，秒出。
+        base.pop("types", None)
     ck = None if tab in ONLINE_NO_CACHE else _cache_key(
         "online", tab=tab, p=json.dumps(base, sort_keys=True, ensure_ascii=False))
     hit = _cache_get(ck) if ck else None
     if hit is not None:
         logger.info("ONLINE_CACHE_HIT user=%s tab=%s kw=%s", user, tab, keyword)
         return jsonify({"ok": True, "cached": True, "job_id": "",
-                        "result": _online_filter(tab, hit, keyword)})
+                        "result": _online_filter(tab, hit, keyword, types)})
 
     # 清理该类型已结束的任务，避免内存累积
     for sid, sj in list(RESULT_JOBS.items()):
@@ -2303,7 +2320,7 @@ def api_online_query():
                            "user": user, "status": "queued", "progress": "排队中",
                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     threading.Thread(target=_online_worker,
-                     args=(job_id, tab, base, ck, keyword), daemon=True).start()
+                     args=(job_id, tab, base, ck, keyword, types), daemon=True).start()
     logger.info("ONLINE_QUERY user=%s tab=%s job=%s params=%s",
                 user, tab, job_id, json.dumps(params, ensure_ascii=False))
     return jsonify({"ok": True, "cached": False, "job_id": job_id, "tab": tab})

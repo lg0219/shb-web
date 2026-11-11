@@ -1246,6 +1246,27 @@ def _subform_text(v):
     return "；".join(out)
 
 
+def _subform_has_content(v):
+    """子表单是否有实际内容（2026-11-11 hunter 定：不存在 / 空数组 / 各行字段全空 → 都算空）"""
+    if v in (None, "", [], {}):
+        return False
+    if not isinstance(v, list):
+        if isinstance(v, dict):
+            return bool(v)
+        return bool(cell(v).strip())
+    for row in v:
+        if not isinstance(row, dict):
+            if cell(row).strip():
+                return True
+            continue
+        for k, x in row.items():
+            if k == "subFormContentId":      # 子表单行 ID，不算内容
+                continue
+            if cell(x).strip():
+                return True
+    return False
+
+
 def q_accept(params, progress, deadline):
     """验收进度（在线）：一单一行
 
@@ -1330,7 +1351,7 @@ def q_audit_check(params, progress, deadline):
     口径（2026-11-11 hunter 确认）：
       1) 重复工单：同客户编号 + 同工单类型 >1 单即报
          范围 = 工程/预调试/调试/验收/保运；涉及人员取建单人；工单号多个换行
-      2) 未签到：只看已开始（有开始时间）的工单，**按人**判
+      2) 漏打卡（原「未签到」，2026-11-11 hunter 改名）：只看已开始（有开始时间）的工单，**按人**判
          缺到场→「缺到场签到」；缺离场→「缺离场打卡」；都缺→「未打卡」
       3) 筛选：按工单**创建时间**，默认当月；关键字按姓名（涉及人员）
     """
@@ -1374,7 +1395,7 @@ def q_audit_check(params, progress, deadline):
             "工单号": "\n".join(nos),
         })
 
-    # ── 2) 未签到（按人）──
+    # ── 2) 漏打卡（按人；原「未签到」，2026-11-11 hunter 改名）──
     for t in tasks:
         init = details.get(t.get("id")) or {}
         task = init.get("task") or {}
@@ -1407,7 +1428,7 @@ def q_audit_check(params, progress, deadline):
             else:
                 desc = "缺离场打卡"
             rows.append({
-                "错误类型": "未签到",
+                "错误类型": "漏打卡",
                 "错误描述": desc,
                 "涉及人员": u,
                 "工单类型": t.get("templateName") or "",
@@ -1434,6 +1455,33 @@ def q_audit_check(params, progress, deadline):
         rows.append({
             "错误类型": "计划日期未填",
             "错误描述": desc,
+            "涉及人员": boss,
+            "工单类型": t.get("templateName") or "",
+            "工单号": (t.get("taskNo") or ""),
+        })
+
+    # ── 4) 验收整改（仅验收工单）──
+    # 2026-11-11 hunter 定：是否合格 = 「不合格」且整改内容子表单为空 → 报此错误
+    #   口径：① 只查验收工单，其他类型不涉及；② 进行中的也查，但只读正式值（不读暂存）；
+    #        ③ 子表单不存在/空数组/各行全空都算空；④ 负责人为空（工单未分配）则跳过。
+    for t in tasks:
+        if (t.get("templateName") or "") != "验收工单":
+            continue
+        init = details.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        attr = task.get("attribute") or {}
+        if cell(attr.get("field_Kj4IeaWFxaNj4FiJ")).strip() != "不合格":
+            continue
+        if _subform_has_content(attr.get("field_mOho8BGmdv9B1FGu")):
+            continue
+        boss = ((task.get("executor") or {}).get("displayName")
+                or (t.get("executorUser") or {}).get("displayName")
+                or t.get("executorName") or "").strip()
+        if not boss:
+            continue
+        rows.append({
+            "错误类型": "验收整改",
+            "错误描述": "验收未通过，缺整改内容子表单",
             "涉及人员": boss,
             "工单类型": t.get("templateName") or "",
             "工单号": (t.get("taskNo") or ""),
