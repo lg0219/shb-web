@@ -37,6 +37,31 @@ HTTP_TIMEOUT = 30
 QUERY_BUDGET = 180         # 秒：单次在线查询总预算（行程单默认整月数据量大，预留充足）
 
 DEBUG_TASK_TID = "f6690742-8462-42c9-b7dd-fe36ea405eb6"   # 调试工单类型
+MAINT_TASK_TID = "1d0a8205-e753-43b2-b811-9c970c12dab5"  # 保运工单类型
+# 保运「服务内容」11 项（第 11 项为手填文本），列名与售后宝字段显示名一致（2026-11-11 核实）
+MAINT_ITEMS = [
+    ("field_Fdlx52zIjIrKAeLs", "1、检查控制系统是否显示正常"),
+    ("field_dsSkKVBWER6TrzeN", "2、检查各阀门开关、控制是否正常"),
+    ("field_7mCCgFC0OzxT5r2U", "3、排除储罐内液氮"),
+    ("field_WJSDwBqVK3v2XAm6", "4、储罐进LNG"),
+    ("field_hqI0u84UGX3uqeER", "5、管路漏点处理、冷紧"),
+    ("field_KkHmn7g8H5bz7LPg", "6、培训卸车操作"),
+    ("field_imFTbYT1HoJhW53J", "7、培训加液操作"),
+    ("field_S0NlIfaLX4pQ1PHa", "8、培训站控系统"),
+    ("field_U88OKT4q1ZMaNYHO", "9、培训收费系统"),
+    ("field_54aaJjrmq6acfKlM", "10、安全培训"),
+    ("field_jTtLugqBo0ndoXAR", "11、其他"),
+]
+MAINT_COLUMNS = ["项目编号", "项目名称", "开始时间", "完成时间"] + [d for _f, d in MAINT_ITEMS]
+
+# 验收工单（2026-11-11 新增「验收进度」报表）
+ACCEPT_TASK_TID = "8024da3e-6881-48d5-ac58-9d0d4ee1da0a"
+ACCEPT_COLUMNS = ["负责人", "项目编号", "项目名称", "工单状态", "开始时间", "完成时间",
+                  "验收类别", "是否合格", "整改内容"]
+
+# 稽核检查（2026-11-11 新增）
+AUDIT_TYPES = ("工程工单", "预调试工单", "调试工单", "验收工单", "保运工单")
+AUDIT_COLUMNS = ["错误类型", "错误描述", "涉及人员", "工单类型", "工单号"]
 
 STATE_CN = {"created": "待指派", "allocated": "已指派", "accepted": "已接受",
             "processing": "进行中", "finished": "已完成", "refused": "已拒绝",
@@ -73,9 +98,9 @@ P2_DATE_FIELDS = [
 P2_BAOYUN_PERSON = "field_Yc3YHI7w2qowAOZP"   # 保运人员
 
 TRIP_COLUMNS = ["序号", "姓名", "日期", "到场地点", "离场地点", "工单编号", "工单类型", "工作内容"]
-WORKLOAD_COLUMNS = ["工单类型", "客户编号", "客户", "服务部门", "服务人员", "省份",
+WORKLOAD_COLUMNS = ["服务人员", "角色", "工单类型", "客户编号", "客户", "服务部门", "省份",
                     "出发打卡", "到场打卡", "途中时长",
-                    "工单到场签到日期", "工单离场签到日期", "工单时长"]
+                    "到场签到时间", "离场签到时间", "工单时长", "提示"]
 # 调试进度改用明细行：一条调试内容一行（2026-11-10 hunter 指定格式）
 DEBUG_COLUMNS = ["序号", "调试人员", "项目编码", "客户名称", "调试内容", "调试日期"]
 # 调试组件（调试图上的「调试项选择」字段）列 ID，2026-11-10 核实
@@ -99,6 +124,9 @@ TAB_TITLES = {
     "ol:progress2": "项目进度（在线）",
     "ol:workload": "服务人员工作量（在线）",
     "ol:debug-progress": "调试进度（在线）",
+    "ol:maintain-progress": "保运进度（在线）",
+    "ol:accept-progress": "验收进度（在线）",
+    "ol:audit-check": "稽核检查（在线）",
 }
 
 
@@ -337,15 +365,22 @@ def map_details(tasks, deadline=None, progress=None):
         return t.get("id"), task_detail(t.get("id"))
 
     done = 0
+    failed = 0
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futs = [ex.submit(_one, t) for t in tasks]
         for fut in as_completed(futs):
             _check(deadline, "取工单详情")
-            tid, init = fut.result()
+            try:
+                tid, init = fut.result()
+            except Exception:            # 单条超时/失败不拖坡整次查询（2026-11-11）
+                failed += 1
+                continue
             out[tid] = init
             done += 1
             if progress:
                 progress("已取 %d/%d 单" % (done, total))
+    if failed and not out:
+        raise RuntimeError("工单详情全部获取失败（%d 单）" % failed)
     return out
 
 
@@ -389,15 +424,22 @@ def map_records(tasks, deadline=None, progress=None):
         return t.get("id"), fetch_records(t.get("id"))
 
     done = 0
+    failed = 0
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futs = [ex.submit(_one, t) for t in tasks]
         for fut in as_completed(futs):
             _check(deadline, "取工单动态")
-            tid, rows = fut.result()
+            try:
+                tid, rows = fut.result()
+            except Exception:            # 单条失败不影响整体
+                failed += 1
+                continue
             out[tid] = rows
             done += 1
             if progress:
                 progress("已取动态 %d/%d 单" % (done, total))
+    if failed and not out:
+        raise RuntimeError("工单动态全部获取失败（%d 单）" % failed)
     return out
 
 
@@ -613,10 +655,14 @@ def q_weekly(params, progress, deadline):
 
 # ── 报表 3：项目进度2（在线）────────────────────────────────────────
 def page_customers(update_start, deadline=None, progress=None):
-    """客户档案分页（customer list --data，按更新时间过滤）；返回 list"""
+    """客户档案分页（customer list --data，按更新时间过滤）；返回 list
+
+    update_start 为空/None → 拉全量（2026-11-11：项目进度日期留空 = 不限时间）。
+    pageSize 100→200（2026-11-11）：全量 1829 个客户只需 10 次分页调用。
+    """
     rows, page = [], 1
     while True:
-        body = {"pageNum": page, "pageSize": 100}
+        body = {"pageNum": page, "pageSize": 200}
         if update_start:
             body["updateTimeStart"] = update_start
         d = cli(["customer", "list", "--data", json.dumps(body, ensure_ascii=False), "-o", "raw"])
@@ -635,10 +681,21 @@ def page_customers(update_start, deadline=None, progress=None):
 def q_progress2(params, progress, deadline):
     keyword = (params.get("keyword") or "").strip()
     show_done = str(params.get("show_done") or "") == "1"
-    b, e = d_range(params.get("date_begin"), params.get("date_end"))
-    b_dt, e_dt = ts_any(b.replace("T", " ")), ts_any(e.replace("T", " "))
+    # 日期口径（2026-11-11 hunter 确认）：
+    #   · 有填关键字 → 关键字优先，不限时间（在全部客户里按编号/名称匹配）
+    #   · 没填关键字且填了日期 → 按「客户档案最后更新日期」筛
+    #   · 都没填 → 不限时间（拉全量，约 1829 个客户）
+    _db = (params.get("date_begin") or "").strip()
+    _de = (params.get("date_end") or "").strip()
+    if keyword or not (_db or _de):
+        b = e = ""
+    else:
+        b, e = d_range(_db, _de)          # 单边为空时 d_range 会补另一端
+    b_dt = ts_any(b.replace("T", " ")) if b else None
+    e_dt = ts_any(e.replace("T", " ")) if e else None
 
-    customers = page_customers(b.replace("T", " "), deadline=deadline, progress=progress)
+    customers = page_customers(b.replace("T", " ") if b else None,
+                               deadline=deadline, progress=progress)
 
     # 时间窗过滤（客户更新时间落在区间内；取不到时间的不丢，交给字段判断）
     picked = []
@@ -764,17 +821,133 @@ def _wl_hours(a, b):
     return round((b - a).total_seconds() / 3600.0, 1)
 
 
+def card_sign_records(extra):
+    """卡片签到记录 → {人名: {"in": [datetime], "out": [datetime]}}
+
+    2026-11-11：到场/离场按「签到人」分开取（不再跨人取极值）。
+    人名取卡片行的 userName，缺失时回退「签到人员」字段。
+    """
+    names, fmap, rows = _wl_cards(extra)
+    out = {}
+    for cid, cname in names.items():
+        if cname not in ("到场签到", "离场打卡"):
+            continue
+        fm = fmap.get(cid) or {}
+        for r in rows.get(cid) or []:
+            u = (r.get("userName") or "").strip()
+            if not u:
+                for disp, key in fm.items():
+                    if disp == "签到人员" and r.get(key):
+                        u = cell(r.get(key)).strip()
+                        break
+            if not u:
+                continue
+            rec = out.setdefault(u, {"in": [], "out": []})
+            for disp, key in fm.items():
+                if not r.get(key):
+                    continue
+                if cname == "到场签到" and disp in ("签到日期", "时间"):
+                    dt = ts_any(r.get(key))
+                    if dt:
+                        rec["in"].append(dt)
+                elif cname == "离场打卡" and disp in ("时间", "签到日期"):
+                    dt = ts_any(r.get(key))
+                    if dt:
+                        rec["out"].append(dt)
+    return out
+
+
+def person_work_hours(ins, outs, arrive_dt=None):
+    """按人算工时（2026-11-11 hunter 定的业务口径）
+
+    1) 同一天内：到场取最早、离场取最晚（同天误点重复签到）
+    2) 跨天/跨夜：按「到场 → 下一次离场」配对，不按自然日拆
+       （中间整天没签到的跳过，不影响配对）
+    3) 只缺到场：用到达时间（同一天且早于离场时），否则当天 9:00
+    4) 只缺离场：当天 17:00；若到场晚于 17:00 → 次日 17:00
+    5) 到、离都没签：不计算
+
+    返回 (hours|None, 实际签到到场列表, 实际签到离场列表, 提示列表)
+    兑底值只参与计算，不返回列表（不在“签到时间”列里显示）
+    """
+    ins = sorted(x for x in (ins or []) if x)
+    outs = sorted(x for x in (outs or []) if x)
+    day_in, day_out = {}, {}
+    for x in ins:
+        d = x.date()
+        if d not in day_in or x < day_in[d]:
+            day_in[d] = x
+    for x in outs:
+        d = x.date()
+        if d not in day_out or x > day_out[d]:
+            day_out[d] = x
+
+    def _fallback_out(t):
+        """缺离场 → 当天 17:00；已过 17:00 则次日 17:00"""
+        b = t.replace(hour=17, minute=0, second=0, microsecond=0)
+        return b + timedelta(days=1) if b <= t else b
+
+    def _fallback_in(t):
+        """缺到场 → 当天 9:00；9:00 晚于离场则前一天 9:00"""
+        b = t.replace(hour=9, minute=0, second=0, microsecond=0)
+        return b - timedelta(days=1) if b > t else b
+
+    total = 0.0
+    n = 0
+    tips = []
+    used_in, used_out = [], []
+    pending = None          # 待配对的到场
+
+    for d in sorted(set(day_in) | set(day_out)):
+        di, do = day_in.get(d), day_out.get(d)
+        if di:
+            if pending:                     # 上一个到场跨天失败 → 缺离场
+                fb = _fallback_out(pending)
+                total += (fb - pending).total_seconds() / 3600
+                n += 1
+                tips.append("%s 缺离场签到，按 17:00 计算" % pending.strftime("%m-%d"))
+                used_in.append(pending)
+            pending = di
+        if do:
+            if pending:
+                total += (do - pending).total_seconds() / 3600
+                n += 1
+                used_in.append(pending)
+                used_out.append(do)
+                pending = None
+            else:                           # 孤离场 → 缺到场
+                base, why = None, ""
+                if arrive_dt and arrive_dt <= do and arrive_dt.date() == d:
+                    base, why = arrive_dt, "按到达时间计算"
+                else:
+                    base, why = _fallback_in(do), "按 9:00 计算"
+                total += (do - base).total_seconds() / 3600
+                n += 1
+                tips.append("%s 缺到场签到，%s" % (do.strftime("%m-%d"), why))
+                used_out.append(do)
+
+    if pending:
+        fb = _fallback_out(pending)
+        total += (fb - pending).total_seconds() / 3600
+        n += 1
+        tips.append("%s 缺离场签到，按 17:00 计算" % pending.strftime("%m-%d"))
+        used_in.append(pending)
+
+    if n == 0:
+        return None, [], [], []
+    return round(total, 1), sorted(used_in), sorted(used_out), tips
+
+
 def q_workload(params, progress, deadline):
-    person = (params.get("keyword") or "").strip()
+    kw = (params.get("keyword") or "").strip()
     b, e = rng(params, "week")            # 默认当周（周一~周日）
     tasks = search_tasks(b, e, deadline=deadline, progress=progress)
-    if person:
-        tasks = [t for t in tasks if person in (t.get("executorName") or "")]
 
     details = map_details(tasks, deadline=deadline, progress=progress)
     records = map_records(tasks, deadline=deadline, progress=progress)
 
     out = []
+    persons = set()
     for t in tasks:
         init = details.get(t.get("id")) or {}
         task = init.get("task") or {}
@@ -787,8 +960,6 @@ def q_workload(params, progress, deadline):
         arr = ts_any(arr_ts[-1]) if arr_ts else None
         extra = {"cardInfo": init.get("cardInfo"),
                  "receiptTaskForUpdate": init.get("receiptTaskForUpdate")}
-        sign_in = _wl_card_time(extra, "到场签到", ("签到日期", "时间"), "min")
-        sign_out = _wl_card_time(extra, "离场打卡", ("时间", "签到日期"), "max")
         cust = task.get("customer") or {}
         area = ""
         for tag in (cust.get("tags") or []):
@@ -798,23 +969,50 @@ def q_workload(params, progress, deadline):
                 break
         addr = ((task.get("attribute") or {}).get("taskArriveAddress")
                 or task.get("taddressStr") or "")
-        out.append({
+        base = {
             "工单类型": t.get("templateName") or task.get("templateName") or "",
             "客户编号": cust.get("serialNumber") or "",
             "客户": ((t.get("customerEntity") or {}).get("name") or cust.get("name") or ""),
             "服务部门": area,
-            "服务人员": (t.get("executorName")
-                       or (t.get("executorUser") or {}).get("displayName") or ""),
             "省份": _wl_province(extra, addr),
             "出发打卡": dep.strftime("%Y-%m-%d %H:%M:%S") if dep else "",
             "到场打卡": arr.strftime("%Y-%m-%d %H:%M:%S") if arr else "",
             "途中时长": _wl_hours(dep, arr),
-            "工单到场签到日期": sign_in.strftime("%Y-%m-%d %H:%M:%S") if sign_in else "",
-            "工单离场签到日期": sign_out.strftime("%Y-%m-%d %H:%M:%S") if sign_out else "",
-            "工单时长": _wl_hours(sign_in, sign_out),
-        })
-    persons = sorted({r["服务人员"] for r in out if r["服务人员"]})
-    return _resp("ol:workload", out, WORKLOAD_COLUMNS, persons=persons)
+        }
+        boss = (t.get("executorName")
+                or (t.get("executorUser") or {}).get("displayName")
+                or (task.get("executor") or {}).get("displayName") or "").strip()
+        sig = card_sign_records(extra)
+        if not sig:
+            row = dict(base)
+            row.update({"服务人员": boss, "角色": "负责人" if boss else "",
+                        "到场签到时间": "", "离场签到时间": "",
+                        "工单时长": "", "提示": "无签到记录", "__warn": 0, "__tips": ""})
+            out.append(row)
+            if boss:
+                persons.add(boss)
+            continue
+        # 一单多人 → 一人一行（负责人与协同人分开统计）
+        for user, rec in sig.items():
+            hours, used_in, used_out, tips = person_work_hours(rec["in"], rec["out"], arr)
+            row = dict(base)
+            row["服务人员"] = user
+            row["角色"] = "负责人" if user == boss else "协同人"
+            row["到场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_in)
+            row["离场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_out)
+            row["工单时长"] = hours if hours is not None else ""
+            row["提示"] = "；".join(tips)
+            row["__warn"] = 1 if tips else 0
+            row["__tips"] = "；".join(tips)
+            out.append(row)
+            persons.add(user)
+    # 关键字过滤（2026-11-11）：客户编号 / 客户 / 服务人员 / 工单类型
+    if kw:
+        out = [r for r in out
+               if kw in (r.get("客户编号") or "") or kw in (r.get("客户") or "")
+               or kw in (r.get("服务人员") or "") or kw in (r.get("工单类型") or "")]
+    return _resp("ol:workload", out, WORKLOAD_COLUMNS,
+                 persons=sorted({r["服务人员"] for r in out if r.get("服务人员")}))
 
 
 # ── 报表 5：调试进度（在线）──────────────────────────────────────────
@@ -842,10 +1040,15 @@ def q_debug(params, progress, deadline):
     b, e = rng(params, "week")                 # 日期区间（默认当周）
     b_day, e_day = b[:10], e[:10]
     _anchor = ts_any(b_day) or datetime.now()
-    # 默认只查最近 30 天（2026-11-10 hunter 定）；带关键字时放宽到 730 天以覆盖历史
-    back = 730 if keyword else 30
-    win_b = (_anchor - timedelta(days=back)).strftime("%Y-%m-%dT00:00:00")
-    tasks = search_tasks(win_b, e, template_id=DEBUG_TASK_TID,
+    # 时间口径（2026-11-11 hunter 定）：
+    #   · 有填关键字 → 忽略时间条件：工单列表不限起始/截止时间，结果也不按调试日期过滤
+    #   · 无关键字   → 只查最近 30 天
+    if keyword:
+        win_b, win_e, date_filter = None, None, False
+    else:
+        win_b = (_anchor - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00")
+        win_e, date_filter = e, True
+    tasks = search_tasks(win_b, win_e, template_id=DEBUG_TASK_TID,
                          deadline=deadline, progress=progress)
 
     if keyword:
@@ -932,8 +1135,8 @@ def q_debug(params, progress, deadline):
             day = _dp_ts(it.get(DBG_ITEM_TIME))[:10]
             if not content and not names:
                 continue
-            if day and (day < b_day or day > e_day):
-                continue                      # 调试日期不在区间内
+            if date_filter and day and (day < b_day or day > e_day):
+                continue                      # 无关键字时按调试日期筛区间
             if keyword and not any(keyword in str(x) for x in (serial, cname, names, content)):
                 continue
             rows.append({"调试人员": names, "项目编码": serial, "客户名称": cname,
@@ -947,7 +1150,304 @@ def q_debug(params, progress, deadline):
     return _resp("ol:debug-progress", out, DEBUG_COLUMNS)
 
 
-# ── 统一响应 + 分发 ──────────────────────────────────────────────────
+# ── 报表 6：保运进度（在线）──────────────────────────────────
+def q_maint(params, progress, deadline):
+    """保运进度（在线）：一个项目（客户）一行
+
+    口径（2026-11-11 hunter 确认）：
+      · 筛选时间 = 工单开始时间，默认当月
+      · 同一客户多单 → 取创建日期最近的一单
+      · 项目编号/项目名称 = 客户编号/客户名称
+      · 服务内容 11 项 = 已提交值 + 暂存值合并（暂存优先）
+    """
+    keyword = (params.get("keyword") or "").strip()
+    b, e = rng(params, "month")
+    # 关键字优先（2026-11-11 hunter 定）：有填关键字 → 不限时间，
+    # 在项目编号 / 项目名称 / 工单号上做包含匹配
+    if keyword:
+        b_dt = e_dt = None
+    else:
+        b_dt = ts_any(b.replace("T", " ")) if b else None
+        e_dt = ts_any(e.replace("T", " ")) if e else None
+
+    tasks = search_tasks(None, None, template_id=MAINT_TASK_TID,
+                         deadline=deadline, progress=progress)
+    tasks = [t for t in tasks if (t.get("templateName") or "") == "保运工单"]
+    details = map_details(tasks, deadline=deadline, progress=progress) if tasks else {}
+
+    # 先按关键字/「开始时间」筛，再按客户取创建时间最近的一单
+    best = {}
+    for t in tasks:
+        init = details.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        cust = task.get("customer") or {}
+        serial = (cust.get("serialNumber") or "").strip()
+        cname = (cust.get("name") or (t.get("customerEntity") or {}).get("name") or "").strip()
+        if keyword and not (keyword in (t.get("taskNo") or "")
+                            or keyword in serial or keyword in cname):
+            continue
+        st = ts_any(task.get("startTime"))
+        if not st:
+            if not keyword:          # 无关键字时必须有开始时间才能判月份
+                continue
+        elif b_dt and e_dt and not (b_dt <= st <= e_dt):
+            continue
+        key = serial or cname
+        if not key:
+            continue
+        ct = ts_any(t.get("createTime") or task.get("createTime")) or datetime.min
+        cur = best.get(key)
+        if cur is None or ct > cur[0]:
+            best[key] = (ct, t, task)
+
+    rows = []
+    for _key, (_ct, t, task) in best.items():
+        attr = task.get("attribute") or {}
+        tmp = {}
+        if t.get("state") not in ("finished", "closed", "costed", "offed"):
+            nid = attr.get("currentNodeId")
+            if nid:
+                try:
+                    tmp = node_temp_storage(t.get("id"), nid)
+                except Exception:
+                    tmp = {}
+        cust = task.get("customer") or {}
+        serial = (cust.get("serialNumber") or "").strip()
+        cname = (cust.get("name") or (t.get("customerEntity") or {}).get("name") or "").strip()
+        st = ts_any(task.get("startTime"))
+        ft = ts_any(task.get("completeTime"))
+        row = {"项目编号": serial, "项目名称": cname,
+               "开始时间": st.strftime("%Y-%m-%d %H:%M:%S") if st else "",
+               "完成时间": ft.strftime("%Y-%m-%d %H:%M:%S") if ft else ""}
+        for f, label in MAINT_ITEMS:
+            v = tmp.get(f)
+            if v is None or v == "" or v == [] or v == {}:
+                v = attr.get(f)
+            row[label] = cell(v)
+        rows.append(row)
+
+    rows.sort(key=lambda r: (r.get("项目编号") or "", r.get("项目名称") or ""))
+    return _resp("ol:maintain-progress", rows, MAINT_COLUMNS)
+
+
+# ── 报表 7：验收进度（在线）──────────────────────────────────
+def _subform_text(v):
+    """子表单（list[dict]）→ 一行文字：逐行拼接非空值，多行用「；」连接"""
+    if not isinstance(v, list):
+        return cell(v)
+    out = []
+    for row in v:
+        if not isinstance(row, dict):
+            continue
+        vals = [cell(x).strip() for k, x in row.items()
+                if k != "subFormContentId" and cell(x).strip()]
+        if vals:
+            out.append("；".join(vals))
+    return "；".join(out)
+
+
+def q_accept(params, progress, deadline):
+    """验收进度（在线）：一单一行
+
+    口径（2026-11-11 hunter 确认）：
+      · 筛选时间 = 工单开始时间，默认当月；有关键字时不限时间
+      · 关键字 = 项目编号 / 项目名称 / 工单号
+      · 验收类别以验收节点值为准，为空回退工单级值
+      · 整改内容 = 「整改项」子表单
+      · 已提交值 + 当前节点暂存值合并（暂存优先）；结果走缓存（30 分钟）
+    """
+    keyword = (params.get("keyword") or "").strip()
+    b, e = rng(params, "month")
+    if keyword:
+        b_dt = e_dt = None
+    else:
+        b_dt = ts_any(b.replace("T", " ")) if b else None
+        e_dt = ts_any(e.replace("T", " ")) if e else None
+
+    tasks = search_tasks(None, None, template_id=ACCEPT_TASK_TID,
+                         deadline=deadline, progress=progress)
+    tasks = [t for t in tasks if (t.get("templateName") or "") == "验收工单"]
+    details = map_details(tasks, deadline=deadline, progress=progress) if tasks else {}
+
+    rows = []
+    for t in tasks:
+        init = details.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        cust = task.get("customer") or {}
+        serial = (cust.get("serialNumber") or "").strip()
+        cname = (cust.get("name") or (t.get("customerEntity") or {}).get("name") or "").strip()
+        if keyword and not (keyword in (t.get("taskNo") or "")
+                            or keyword in serial or keyword in cname):
+            continue
+        st = ts_any(task.get("startTime"))
+        if not st:
+            if not keyword:
+                continue
+        elif b_dt and e_dt and not (b_dt <= st <= e_dt):
+            continue
+
+        attr = task.get("attribute") or {}
+        tmp = {}
+        if t.get("state") not in ("finished", "closed", "costed", "offed"):
+            nid = attr.get("currentNodeId")
+            if nid:
+                try:
+                    tmp = node_temp_storage(t.get("id"), nid)
+                except Exception:
+                    tmp = {}
+
+        def pick(f):
+            v = tmp.get(f)
+            if v is None or v == "" or v == [] or v == {}:
+                v = attr.get(f)
+            return v
+
+        ex = ((task.get("executor") or {}).get("displayName")
+              or (t.get("executorUser") or {}).get("displayName")
+              or t.get("executorName") or "")
+        ft = ts_any(task.get("completeTime"))
+        cat = cell(pick("field_xF3USPMV2qusrPcd")) or cell(pick("field_gZKddPgQ15cYoPHu"))
+        rows.append({
+            "负责人": ex,
+            "项目编号": serial,
+            "项目名称": cname,
+            "工单状态": STATE_CN.get(t.get("state"), t.get("state") or ""),
+            "开始时间": st.strftime("%Y-%m-%d %H:%M:%S") if st else "",
+            "完成时间": ft.strftime("%Y-%m-%d %H:%M:%S") if ft else "",
+            "验收类别": cat,
+            "是否合格": cell(pick("field_Kj4IeaWFxaNj4FiJ")),
+            "整改内容": _subform_text(pick("field_mOho8BGmdv9B1FGu")),
+        })
+
+    rows.sort(key=lambda r: (r.get("开始时间") or "", r.get("项目编号") or ""), reverse=True)
+    return _resp("ol:accept-progress", rows, ACCEPT_COLUMNS)
+
+
+# ── 报表 8：稽核检查（在线）──────────────────────────────────
+def q_audit_check(params, progress, deadline):
+    """稽核检查（在线）：一工单一行，多种错误多行
+
+    口径（2026-11-11 hunter 确认）：
+      1) 重复工单：同客户编号 + 同工单类型 >1 单即报
+         范围 = 工程/预调试/调试/验收/保运；涉及人员取建单人；工单号多个换行
+      2) 未签到：只看已开始（有开始时间）的工单，**按人**判
+         缺到场→「缺到场签到」；缺离场→「缺离场打卡」；都缺→「未打卡」
+      3) 筛选：按工单**创建时间**，默认当月；关键字按姓名（涉及人员）
+    """
+    keyword = (params.get("keyword") or "").strip()
+    types = [x.strip() for x in (params.get("types") or "").split(",") if x.strip()]
+    b, e = rng(params, "month")
+    tasks = search_tasks(b, e, deadline=deadline, progress=progress)
+    tasks = [t for t in tasks if (t.get("templateName") or "") in AUDIT_TYPES]
+    details = map_details(tasks, deadline=deadline, progress=progress) if tasks else {}
+
+    rows = []
+
+    # ── 1) 重复工单 ──
+    groups = {}
+    for t in tasks:
+        init = details.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        serial = ((task.get("customer") or {}).get("serialNumber") or "").strip()
+        typ = t.get("templateName") or ""
+        if not serial or not typ:
+            continue
+        groups.setdefault((serial, typ), []).append((t, task))
+    for (serial, typ), lst in groups.items():
+        if len(lst) < 2:
+            continue
+        makers, nos = [], []
+        for t, task in lst:
+            no = (t.get("taskNo") or "").strip()
+            if no:
+                nos.append(no)
+            mk = ((task.get("createUser") or {}).get("displayName")
+                  or (t.get("createUserName") or "") or "").strip()
+            if mk and mk not in makers:
+                makers.append(mk)
+        rows.append({
+            "错误类型": "重复工单",
+            "错误描述": "保运工单之前的所有工单，一个项目只能一次工单，%s这个项目有%d个工单。"
+                        % (serial, len(lst)),
+            "涉及人员": "、".join(makers),
+            "工单类型": typ,
+            "工单号": "\n".join(nos),
+        })
+
+    # ── 2) 未签到（按人）──
+    for t in tasks:
+        init = details.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        if not ts_any(task.get("startTime")):
+            continue                      # 没开始的不查打卡
+        extra = {"cardInfo": init.get("cardInfo"),
+                 "receiptTaskForUpdate": init.get("receiptTaskForUpdate")}
+        sig = card_sign_records(extra)
+        # 参与人 = 协同人（含转派协同名单）+ 实际签到人；**不强制包含负责人**
+        # （2026-11-11 hunter 定：参与人就是协同人，负责人不一定去现场）
+        people = []
+        _syn = [(x or {}).get("displayName") or (x or {}).get("userName")
+                for x in (task.get("synergies") or [])]
+        _syn += [(x or {}).get("displayName") or (x or {}).get("userName")
+                 for x in (task.get("reAllotUserList")
+                           or (task.get("attribute") or {}).get("reAllotUserList") or [])]
+        for u in _syn + list(sig):
+            u = (u or "").strip()
+            if u and u not in people:
+                people.append(u)
+        for u in people:
+            rec = sig.get(u) or {"in": [], "out": []}
+            has_in, has_out = bool(rec["in"]), bool(rec["out"])
+            if has_in and has_out:
+                continue
+            if not has_in and not has_out:
+                desc = "未打卡"
+            elif not has_in:
+                desc = "缺到场签到"
+            else:
+                desc = "缺离场打卡"
+            rows.append({
+                "错误类型": "未签到",
+                "错误描述": desc,
+                "涉及人员": u,
+                "工单类型": t.get("templateName") or "",
+                "工单号": (t.get("taskNo") or ""),
+            })
+
+    # ── 3) 计划日期未填 ──
+    for t in tasks:
+        init = details.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        ps = (task.get("planStartTime") or "").strip()
+        pe = (task.get("planEndTime") or "").strip()
+        if ps and pe:
+            continue
+        if not ps and not pe:
+            desc = "计划时间未填"
+        elif not ps:
+            desc = "计划开始时间未填"
+        else:
+            desc = "计划结束时间未填"
+        boss = ((task.get("executor") or {}).get("displayName")
+                or (t.get("executorUser") or {}).get("displayName")
+                or t.get("executorName") or "").strip()
+        rows.append({
+            "错误类型": "计划日期未填",
+            "错误描述": desc,
+            "涉及人员": boss,
+            "工单类型": t.get("templateName") or "",
+            "工单号": (t.get("taskNo") or ""),
+        })
+
+    if types:
+        rows = [r for r in rows if r.get("错误类型") in types]
+    if keyword:
+        rows = [r for r in rows if keyword in (r.get("涉及人员") or "")]
+    rows.sort(key=lambda r: (r.get("错误类型") or "", r.get("工单号") or ""))
+    return _resp("ol:audit-check", rows, AUDIT_COLUMNS)
+
+
+# ── 统一响应 + 分发 ─────────────────────────────────────────────────────
 def _date_only(s):
     """日期字段统一成 YYYY-MM-DD（去掉多余的 00:00:00 时间部分）"""
     s = (s or "").strip()
@@ -976,6 +1476,9 @@ HANDLERS = {
     "ol:progress2": q_progress2,
     "ol:workload": q_workload,
     "ol:debug-progress": q_debug,
+    "ol:maintain-progress": q_maint,
+    "ol:accept-progress": q_accept,
+    "ol:audit-check": q_audit_check,
 }
 
 

@@ -38,6 +38,7 @@ body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; backgr
 .topbar { height:52px; background:#fff; border-bottom:1px solid #e3e8ee; display:flex; align-items:center; gap:14px; padding:0 18px; }
 .icon-btn { width:34px; height:34px; border:1px solid #dfe6e9; background:#fff; border-radius:7px; cursor:pointer; font-size:16px; }
 .crumb { font-size:15px; font-weight:600; color:#15324e; }
+.crumb-note { font-size:11.5px; color:#d63031; line-height:1.35; white-space:pre-line; overflow:hidden; max-height:48px; flex:1; min-width:0; }
 .wp-tab { padding:5px 14px; border:1px solid #dfe6e9; background:#fff; border-radius:14px; font-size:13px; color:#6b7280; cursor:pointer; }
 .wp-tab:hover { border-color:#0d6efd; color:#0d6efd; }
 .wp-tab.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
@@ -48,6 +49,15 @@ body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; backgr
 .form-group { display:flex; flex-direction:column; gap:6px; }
 .form-group label { font-size:12px; color:#6b7280; font-weight:500; }
 .form-group input, .form-group select { padding:8px 12px; border:1px solid #dfe6e9; border-radius:6px; font-size:14px; outline:none; min-width:160px; }
+/* ── 多选下拉（错误类型筛选，2026-11-11）── */
+.ms-wrap { position:relative; }
+.ms-btn { padding:8px 12px; border:1px solid #dfe6e9; border-radius:6px; font-size:14px; background:#fff; cursor:pointer; min-width:170px; text-align:left; color:#2d3436; }
+.ms-btn:hover { border-color:#0d6efd; }
+.ms-panel { display:none; position:absolute; top:100%; left:0; margin-top:4px; background:#fff; border:1px solid #dfe6e9; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12); padding:6px 0; min-width:190px; z-index:60; max-height:260px; overflow:auto; }
+.ms-item { display:flex; align-items:center; gap:8px; padding:7px 12px; font-size:13px; cursor:pointer; white-space:nowrap; }
+.ms-item:hover { background:#f7f9fc; }
+.ms-item input { min-width:auto !important; width:14px; height:14px; }
+.ms-all { border-bottom:1px solid #eef1f4; margin-bottom:4px; padding-bottom:9px; font-weight:600; }
 .btn-query { padding:8px 28px; background:#0d6efd; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
 .btn-export { padding:8px 28px; background:#12b886; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
 .btn-save { padding:8px 28px; background:#f77f00; color:#fff; border:none; border-radius:6px; font-size:14px; cursor:pointer; height:37px; }
@@ -59,16 +69,16 @@ body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; backgr
 .error { color:#d63031; padding:12px 16px; background:#ffeaa7; border-radius:8px; margin-top:12px; display:none; }
 
 /* ── 数据区 ── */
-.body { flex:1; overflow:auto; padding:16px 18px; }
-.table-wrap { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); overflow:hidden; }
-.table-scroll { overflow-x:auto; }
+.body { flex:1; overflow:hidden; padding:16px 18px; display:flex; flex-direction:column; }
+.table-wrap { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); overflow:hidden; flex:1; min-height:0; display:flex; flex-direction:column; }
+.table-scroll { flex:1; overflow:auto; min-height:0; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
 thead { background:#f7f9fc; }
-th { padding:10px 12px; text-align:left; font-weight:600; color:#6b7280; border-bottom:2px solid #e3e8ee; white-space:nowrap; }
+th { padding:10px 12px; text-align:left; font-weight:600; color:#6b7280; border-bottom:2px solid #e3e8ee; white-space:nowrap; position:sticky; top:0; background:#f7f9fc; z-index:2; }
 td { padding:8px 12px; text-align:left; border-bottom:1px solid #f1f2f6; }
 tr:hover td { background:#f7f9fc; }
 .empty { padding:40px; text-align:center; color:#b2bec3; }
-.pagination { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#f8f9fa; border-top:1px solid #dfe6e9; }
+.pagination { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#f8f9fa; border-top:1px solid #dfe6e9; flex:0 0 auto; }
 .page-btn { padding:4px 12px; border:1px solid #dfe6e9; border-radius:4px; background:#fff; cursor:pointer; font-size:13px; }
 .page-btn:disabled { opacity:.4; cursor:default; }
 .col-text { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -95,6 +105,7 @@ tr:hover td { background:#f7f9fc; }
     <div class="topbar">
       <button id="toggleBtn" class="icon-btn" title="收起侧边栏">☰</button>
       <div class="crumb" id="pageTitle"></div>
+      <div class="crumb-note" id="tabNote"></div>
       <div id="wpTabs" style="display:none;align-items:center;gap:6px">
         <button class="wp-tab active" data-mode="plan" onclick="setWeeklyMode('plan')">周计划</button>
         <button class="wp-tab" data-mode="summary" onclick="setWeeklyMode('summary')">周总结</button>
@@ -238,6 +249,14 @@ function renderMenu() {
     menu.appendChild(wrap);
   });
   document.getElementById('pageTitle').textContent = isAuditTab ? '操作日志' : (isSyncTab ? '同步中心' : (isSyncLogTab ? '同步日志' : (isIdTab ? '身份管理' : (isUsersAccountTab ? '账号管理' : (tabTitles[currentTab] || currentTab)))));
+  // 标题右侧说明（省屏幕空间）：目前仅项目进度（在线）有（2026-11-11）
+  const _note = document.getElementById('tabNote');
+  if (_note) {
+    const _quiet = (isAuditTab || isSyncTab || isSyncLogTab || isIdTab || isUsersAccountTab);
+    const _txt = _quiet ? '' : (TAB_NOTES[currentTab] || '');
+    _note.textContent = _txt;
+    _note.title = _txt;
+  }
   const _wp = document.getElementById('wpTabs');
   if (_wp) {
     const on = ((currentTab === 'weekly-plan' || currentTab === 'ol:weekly-plan') && !isAuditTab && !isSyncTab && !isSyncLogTab && !isIdTab && !isUsersAccountTab);
@@ -296,8 +315,8 @@ const RESULT_FORMS = {
     {id:'user_dept', label:'部门', ph:'部门'}
   ],
   workload: [
-    {id:'wl_month', label:'月份', type:'month'},
-    {id:'wl_person', label:'服务人员', ph:'姓名（空=全部）'}
+    {id:'wl_person', label:'关键字', ph:'客户编号/客户/服务人员/工单类型'},
+    {id:'wl_month', label:'月份', type:'month'}
   ],
   records: [
     {id:'rec_month', label:'月份', type:'month'},
@@ -311,7 +330,20 @@ const RESULT_FORMS = {
 };
 
 // ══ 在线报表（ol:*）—— 云端实时查询，与本地库无关（2026-11-10）══
-const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress'];
+const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress', 'ol:maintain-progress', 'ol:accept-progress', 'ol:audit-check'];
+// 项目进度（在线）查询口径说明（显示在页面标题右侧，红色小字）
+const PROGRESS2_NOTE = '说明：关键字按客户编号或客户名称模糊匹配，不限时间；日期筛选客户档案的最后更新日期，留空表示不限；默认隐藏已填保运完毕日期的客户，勾选「显示已完成」才显示。';
+// 调试进度（在线）说明
+const DEBUG_NOTE = '说明：默认查询当月；查历史请输入项目编号或客户名称；调试内容为空时不显示；按关键字查询时不限时间。';
+// 保运进度（在线）说明
+const MAINT_NOTE = '说明：关键字按项目编号、项目名称、工单号模糊匹配，有填关键字时不限时间；日期按工单开始时间筛选，默认当月；同一项目（客户）有多单时取创建日期最近的一单；\n服务内容取该单已提交与暂存数据的合并值。';
+// 需要显示标题右侧说明的 Tab
+const ACCEPT_NOTE = '说明：关键字按项目编号、项目名称、工单号模糊匹配，有填关键字时不限时间；日期按工单开始时间筛选，默认当月；验收类别以验收节点为准；整改内容取整改项子表单；结果缓存 30 分钟，刚暂存的内容可能不是即时最新。';
+// 服务人员工作量说明（本地版 + 在线版）
+const WORKLOAD_NOTE = '说明：每天到场/离场都要打卡；工时按「到场→下一次离场」配对、按天累加，跨天不拆分；同一天多次签到取最早/最晚；\n只缺到场：用「到达时间」代替或用 9:00 计算；只缺离场：按当天 17:00 计算；到场离场都缺的，不计工时。有兜底计算的行，工时标红可点击查看原因。';
+// 稽核检查（在线）说明
+const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月；重复工单=同客户同类型工单超过 1 单（工程/预调试/调试/验收/保运），涉及人员取建单人；\n未签到=已开始工单按参与人（协同人+实际签到人）检查到场/离场打卡；计划日期未填=计划开始/结束时间缺失，涉及人员取负责人。';
+const TAB_NOTES = {'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
   'ol:trip': [
@@ -325,12 +357,12 @@ const ONLINE_FORMS = {
   ],
   'ol:progress2': [
     {id:'olp2_kw', label:'客户编号/名称', ph:'可空', param:'keyword'},
-    {id:'olp2_begin', label:'日期从', type:'date', param:'date_begin', tip:'客户档案的最后更新日期'},
-    {id:'olp2_end', label:'日期至', type:'date', param:'date_end', tip:'客户档案的最后更新日期'},
+    {id:'olp2_begin', label:'日期从', type:'date', param:'date_begin', tip:'客户档案的最后更新日期（留空=不限）'},
+    {id:'olp2_end', label:'日期至', type:'date', param:'date_end', tip:'客户档案的最后更新日期（留空=不限）'},
     {id:'olp2_done', label:'显示已完成', type:'checkbox', param:'show_done'}
   ],
   'ol:workload': [
-    {id:'olwl_person', label:'服务人员', ph:'姓名（空=全部）', param:'keyword'},
+    {id:'olwl_person', label:'关键字', ph:'客户编号/客户/服务人员/工单类型', param:'keyword'},
     {id:'olwl_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单的创建时间（建单时间）'},
     {id:'olwl_end', label:'日期至', type:'date', param:'date_end', tip:'工单的创建时间（建单时间）'}
   ],
@@ -338,6 +370,22 @@ const ONLINE_FORMS = {
     {id:'oldebug_kw', label:'关键字', ph:'工单编号/客户（可空）', param:'keyword'},
     {id:'oldebug_begin', label:'日期从', type:'date', param:'date_begin', tip:'实际调试完成日期'},
     {id:'oldebug_end', label:'日期至', type:'date', param:'date_end', tip:'实际调试完成日期'}
+  ],
+  'ol:maintain-progress': [
+    {id:'olm_kw', label:'关键字', ph:'项目编号/项目名称/工单号', param:'keyword'},
+    {id:'olm_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单开始时间'},
+    {id:'olm_end', label:'日期至', type:'date', param:'date_end', tip:'工单开始时间'}
+  ],
+  'ol:accept-progress': [
+    {id:'ola_kw', label:'关键字', ph:'项目编号/项目名称/工单号', param:'keyword'},
+    {id:'ola_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单开始时间'},
+    {id:'ola_end', label:'日期至', type:'date', param:'date_end', tip:'工单开始时间'}
+  ],
+  'ol:audit-check': [
+    {id:'olaud_kw', label:'姓名', ph:'涉及人员姓名（可空）', param:'keyword'},
+    {id:'olaud_type', label:'错误类型', type:'multiselect', param:'types', options:['重复工单','未签到','计划日期未填']},
+    {id:'olaud_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单创建时间'},
+    {id:'olaud_end', label:'日期至', type:'date', param:'date_end', tip:'工单创建时间'}
   ]
 };
 
@@ -349,6 +397,19 @@ function buildResultForm(tab) {
   box.style.display = 'flex';
   let html = '';
   cfg.forEach(f => {
+    if (f.type === 'multiselect') {
+      const opts = f.options || [];
+      html += '<div class="form-group"><label>' + esc(f.label) + '</label>'
+            + '<div class="ms-wrap" id="' + f.id + '">'
+            + '<button type="button" class="ms-btn" onclick="_msToggle(\'' + f.id + '\', event)">全部 ▾</button>'
+            + '<div class="ms-panel" id="' + f.id + '_panel" onclick="event.stopPropagation()">'
+            + '<label class="ms-item ms-all"><input type="checkbox" class="ms-allbox" checked onchange="_msAll(\'' + f.id + '\', this.checked)">全选</label>'
+            + opts.map(function(o){
+                return '<label class="ms-item"><input type="checkbox" class="ms-opt" value="' + esc(o) + '" checked onchange="_msLabel(\'' + f.id + '\')">' + esc(o) + '</label>';
+              }).join('')
+            + '</div></div></div>';
+      return;
+    }
     if (f.type === 'checkbox') {
       html += '<div class="form-group" style="flex-direction:row;align-items:center;gap:6px">'
             + '<input type="checkbox" id="' + f.id + '" style="min-width:auto;width:16px;height:16px;cursor:pointer" onchange="doSearch()">'
@@ -366,9 +427,6 @@ function buildResultForm(tab) {
   if (!isOl && isAdmin && !NO_SAVE[tab]) {
     const _saveTxt = (tab === 'trip' || tab === 'progress') ? '💾 更新' : (tab === 'workload' ? '🔄 更新' : '💾 保存');
     html += '<button class="btn-save" id="btn-save-res" onclick="doSave()">' + _saveTxt + '</button>';
-  }
-  if (tab === 'ol:debug-progress') {
-    html += '<span style="color:#d63031;font-size:12px;line-height:1.6;max-width:380px">说明：默认查询最近 30 天；查历史请按项目编号查询</span>';
   }
   box.innerHTML = html;
   const m = document.getElementById('trip_month');
@@ -395,8 +453,11 @@ function buildResultForm(tab) {
     const _set = (id, v) => { const el = document.getElementById(id); if (el && !el.value) el.value = v; };
     _set('olt_begin', _isoDate(_m1)); _set('olt_end', _isoDate(_m2));
     _set('olwl_begin', _isoDate(_mon)); _set('olwl_end', _isoDate(_sun));
-    _set('oldebug_begin', _isoDate(_mon)); _set('oldebug_end', _isoDate(_sun));
-    _set('olp2_begin', _isoDate(_d7)); _set('olp2_end', _isoDate(_now));
+    _set('oldebug_begin', _isoDate(_m1)); _set('oldebug_end', _isoDate(_m2));
+    _set('olm_begin', _isoDate(_m1)); _set('olm_end', _isoDate(_m2));
+    _set('ola_begin', _isoDate(_m1)); _set('ola_end', _isoDate(_m2));
+    _set('olaud_begin', _isoDate(_m1)); _set('olaud_end', _isoDate(_m2));
+    _set('olp2_begin', _isoDate(_m1)); _set('olp2_end', _isoDate(_m2));
     _set('olw_week', _isoDate(_now));
   }
   updateJobBox();
@@ -496,6 +557,42 @@ async function pollJob(id, tab) {
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
+// ── 多选下拉（错误类型筛选，2026-11-11）──
+function _msToggle(id, ev) {
+  if (ev) ev.stopPropagation();
+  const p = document.getElementById(id + '_panel');
+  if (!p) return;
+  const open = p.style.display === 'block';
+  document.querySelectorAll('.ms-panel').forEach(x => { x.style.display = 'none'; });
+  p.style.display = open ? 'none' : 'block';
+}
+function _msLabel(id) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  const opts = Array.from(box.querySelectorAll('input.ms-opt'));
+  const checked = opts.filter(x => x.checked);
+  const all = box.querySelector('input.ms-allbox');
+  if (all) all.checked = (opts.length > 0 && checked.length === opts.length);
+  const btn = box.querySelector('.ms-btn');
+  if (!btn) return;
+  btn.textContent = (opts.length && checked.length === opts.length ? '全部'
+                    : (checked.length ? checked.map(x => x.value).join('、') : '未选')) + ' ▾';
+}
+function _msAll(id, on) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  box.querySelectorAll('input.ms-opt').forEach(x => { x.checked = !!on; });
+  _msLabel(id);
+}
+function _msValues(id) {
+  const box = document.getElementById(id);
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('input.ms-opt:checked')).map(x => x.value);
+}
+document.addEventListener('click', function(){
+  document.querySelectorAll('.ms-panel').forEach(x => { x.style.display = 'none'; });
+});
+
 // 点击“?”弹出提示（2026-11-10）
 let _tipEl = null;
 function showTip(ev, el, text) {
@@ -535,6 +632,11 @@ function onlineParams() {
   const cfg = ONLINE_FORMS[currentTab] || [];
   const p = {};
   cfg.forEach(f => {
+    if (f.type === 'multiselect') {
+      const _vals = _msValues(f.id);
+      if (_vals.length) p[f.param] = _vals.join(',');
+      return;
+    }
     const el = document.getElementById(f.id);
     if (!el) return;
     if (f.type === 'checkbox') { if (el.checked) p[f.param] = '1'; return; }
@@ -605,6 +707,12 @@ function renderResultData(data) {
   data.rows.forEach(row => { html += '<tr>' + cols.map((c, ci) => {
     const _v = row[c] == null ? '' : row[c];
     if (_rawCells) return '<td title="'+esc(String(_v).replace(/<br\s*\/?>/gi,' / '))+'" class="col-wrap"'+(ci === 0 ? ' style="text-align:center"' : '')+'>'+_v+'</td>';
+    if (!_rawCells && (c === '工单号' || c === '错误描述') && String(_v).indexOf('\n') >= 0) {
+      return '<td title="'+esc(_v)+'" class="col-wrap">'+esc(_v).replace(/\n/g,'<br>')+'</td>';
+    }
+    if (c === '工单时长' && row.__warn) {
+      return '<td title="'+esc(_v)+'" class="col-text" style="color:#d63031;cursor:pointer" onclick="showTip(event,this,'+JSON.stringify(String(row.__tips||'')).replace(/"/g,'&quot;')+')">'+esc(_v)+'</td>';
+    }
     return '<td title="'+esc(_v)+'" class="col-text">'+esc(_v)+'</td>';
   }).join('') + '</tr>'; });
   html += '</tbody></table>'; tc.innerHTML = html;
@@ -860,6 +968,9 @@ async function doExportOnline() {
   const box = document.getElementById('job-status');
   const base = {'ol:trip':'行程单（在线）','ol:workload':'服务人员工作量（在线）',
                 'ol:progress2':'项目进度（在线）','ol:debug-progress':'调试进度（在线）',
+                'ol:maintain-progress':'保运进度（在线）',
+                'ol:accept-progress':'验收进度（在线）',
+                'ol:audit-check':'稽核检查（在线）',
                 'ol:weekly-plan':'周计划（在线）'}[currentTab] || '在线报表';
   try {
     if (typeof XLSX === 'undefined') {

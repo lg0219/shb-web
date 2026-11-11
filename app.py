@@ -142,8 +142,14 @@ ONLINE_TABS = {
     "ol:progress2": "项目进度（在线）",
     "ol:workload": "服务人员工作量（在线）",
     "ol:debug-progress": "调试进度（在线）",
+    "ol:maintain-progress": "保运进度（在线）",
+    "ol:accept-progress": "验收进度（在线）",
+    "ol:audit-check": "稽核检查（在线）",
 }
 ONLINE_CACHE_TTL = 1800  # 在线报表结果缓存 30 分钟（2026-11-10 hunter 定）
+# 不缓存的在线报表（2026-11-11）：保运进度含「暂存」数据，暂存随时变，
+# 30 分钟缓存会让用户刚暂存完查不到 → 改为每次实时取数。
+ONLINE_NO_CACHE = {"ol:maintain-progress"}
 
 # ══ 系统 Tab（对照表等）2026-10-08 ══
 SYSTEM_TITLES = {"fieldmap": "数据字典", "sync": "同步中心", "synclog": "同步日志",
@@ -360,9 +366,9 @@ def query_records(month, keyword, action, page, page_size):
 # ══ 服务人员工作量（2026-10-21 新增）═══════════════════════════════════
 # 口径：出发=动态「出发」最早 / 到场=动态「到达」最晚 / 途中时长=差值
 #      到场签到、离场打卡取附加组件卡片；工单时长=离场签到−到场签到（小时，1 位小数）
-WORKLOAD_COLUMNS = ["工单类型", "客户编号", "客户", "服务部门", "服务人员", "省份",
+WORKLOAD_COLUMNS = ["服务人员", "角色", "工单类型", "客户编号", "客户", "服务部门", "省份",
                     "出发打卡", "到场打卡", "途中时长",
-                    "工单到场签到日期", "工单离场签到日期", "工单时长"]
+                    "到场签到时间", "离场签到时间", "工单时长", "提示"]
 _WL_DT_FMTS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
 
 
@@ -450,9 +456,6 @@ def query_workload(month, person, page, page_size):
                "  from tasks t left join task_raw r on r.id = t.id "
                " where coalesce(t.deleted,0)=0 and t.create_time like ?")
         args = [month + "%"]
-        if person:
-            sql += " and coalesce(t.executor_name,'') like ?"
-            args.append(f"%{person}%")
         sql += " order by t.create_time"
         rows_db = conn.execute(sql, args).fetchall()
         recs = {}
@@ -477,23 +480,46 @@ def query_workload(month, person, page, page_size):
         arrs = recs.get((tid, "到达")) or []
         dep = _wl_dt(min(days)) if days else None
         arr = _wl_dt(max(arrs)) if arrs else None
-        sign_in = _wl_card_time(extra, "到场签到", ("签到日期", "时间"), "min")
-        sign_out = _wl_card_time(extra, "离场打卡", ("时间", "签到日期"), "max")
         cust_no = (detail.get("customer") or {}).get("serialNumber") or ""
-        out.append({
+        base = {
             "工单类型": r["template_name"] or "",
             "客户编号": cust_no,
             "客户": r["customer_name"] or "",
             "服务部门": _wl_area(detail),
-            "服务人员": r["executor_name"] or "",
             "省份": _wl_province(extra, (detail.get("attribute") or {}).get("taskArriveAddress") or r["taddress_str"]),
             "出发打卡": dep.strftime("%Y-%m-%d %H:%M:%S") if dep else "",
             "到场打卡": arr.strftime("%Y-%m-%d %H:%M:%S") if arr else "",
             "途中时长": _wl_hours(dep, arr),
-            "工单到场签到日期": sign_in.strftime("%Y-%m-%d %H:%M:%S") if sign_in else "",
-            "工单离场签到日期": sign_out.strftime("%Y-%m-%d %H:%M:%S") if sign_out else "",
-            "工单时长": _wl_hours(sign_in, sign_out),
-        })
+        }
+        boss = (r["executor_name"] or "").strip()
+        sig = shb_online.card_sign_records(extra)
+        if not sig:
+            row = dict(base)
+            row.update({"服务人员": boss, "角色": "负责人" if boss else "",
+                        "到场签到时间": "", "离场签到时间": "",
+                        "工单时长": "", "提示": "无签到记录", "__warn": 0, "__tips": ""})
+            out.append(row)
+            continue
+        # 一单多人 → 一人一行（负责人与协同人分开统计，2026-11-11）
+        for user, rec in sig.items():
+            hours, used_in, used_out, tips = shb_online.person_work_hours(
+                rec["in"], rec["out"], arr)
+            row = dict(base)
+            row["服务人员"] = user
+            row["角色"] = "负责人" if user == boss else "协同人"
+            row["到场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_in)
+            row["离场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_out)
+            row["工单时长"] = hours if hours is not None else ""
+            row["提示"] = "；".join(tips)
+            row["__warn"] = 1 if tips else 0
+            row["__tips"] = "；".join(tips)
+            out.append(row)
+
+    # 关键字过滤（2026-11-11）：客户编号 / 客户 / 服务人员 / 工单类型
+    if person:
+        out = [r for r in out
+               if person in (r.get("客户编号") or "") or person in (r.get("客户") or "")
+               or person in (r.get("服务人员") or "") or person in (r.get("工单类型") or "")]
 
     total = len(out)
     start = (page - 1) * page_size
@@ -2173,7 +2199,7 @@ def _online_week_monday(s):
 
 
 # 关键字筛在结果行上的字段（这些报表的行粒度=人/客户，可以在缓存的全员结果上过）
-_ONLINE_KEYWORD_COL = {"ol:weekly-plan": "负责人", "ol:workload": "服务人员", "ol:trip": "姓名"}
+_ONLINE_KEYWORD_COL = {"ol:weekly-plan": "负责人", "ol:trip": "姓名"}
 
 
 def _online_filter(tab, resp, keyword):
@@ -2187,6 +2213,16 @@ def _online_filter(tab, resp, keyword):
         rows = [r for r in (resp.get("rows") or [])
                 if keyword in str(r.get("客户编号") or "")
                 or keyword in str(r.get("客户名称") or "")]
+    elif tab == "ol:workload":
+        # 关键字可匹配客户编号 / 客户 / 服务人员 / 工单类型（2026-11-11）
+        rows = [r for r in (resp.get("rows") or [])
+                if keyword in str(r.get("客户编号") or "")
+                or keyword in str(r.get("客户") or "")
+                or keyword in str(r.get("服务人员") or "")
+                or keyword in str(r.get("工单类型") or "")]
+    elif tab == "ol:audit-check":
+        rows = [r for r in (resp.get("rows") or [])
+                if keyword in str(r.get("涉及人员") or "")]
     elif tab == "ol:debug-progress":
         keys = ("项目编码", "客户名称", "调试人员", "调试内容")
         rows = [r for r in (resp.get("rows") or [])
@@ -2211,7 +2247,8 @@ def _online_worker(job_id, tab, params, cache_key, keyword=""):
         def _prog(msg):
             j["progress"] = msg
         resp = shb_online.query(tab, params, progress=_prog)
-        _cache_set(cache_key, resp, ONLINE_CACHE_TTL)   # 缓存全量（不带姓名过滤）
+        if cache_key:
+            _cache_set(cache_key, resp, ONLINE_CACHE_TTL)   # 缓存全量（不带姓名过滤）
         j["result"] = _online_filter(tab, resp, keyword)
         j["status"] = "ok"
         j["progress"] = "完成（%s 秒，%d 行）" % (resp.get("elapsed", "?"), len(resp.get("rows") or []))
@@ -2239,15 +2276,18 @@ def api_online_query():
     keyword = (params.get("keyword") or "").strip()
     base = dict(params)
     base.pop("keyword", None)
+    if tab in ("ol:progress2", "ol:debug-progress", "ol:maintain-progress", "ol:accept-progress"):
+        # 项目进度 / 调试进度 / 保运进度 / 验收进度（2026-11-11）：关键字参与取数（决定是否按时间筛），
+        # 因此 keyword 必须随 base 进缓存键，避免「按时间筛的结果」被关键字查询复用。
+        base["keyword"] = keyword
     if tab == "ol:weekly-plan":
         # 只要落在同一周，选周内哪天都走同一份缓存（2026-11-10 hunter 定）
         base["week_start"] = _online_week_monday(base.get("week_start"))
     if tab == "ol:debug-progress":
-        # 关键字改为结果行过滤（2026-11-10 优化），不进缓存键 → 换关键字命中缓存
-        pass
-    ck = _cache_key("online", tab=tab,
-                    p=json.dumps(base, sort_keys=True, ensure_ascii=False))
-    hit = _cache_get(ck)
+        pass  # 关键字已进 base（2026-11-11 改：参与取数，不再只做结果行过滤）
+    ck = None if tab in ONLINE_NO_CACHE else _cache_key(
+        "online", tab=tab, p=json.dumps(base, sort_keys=True, ensure_ascii=False))
+    hit = _cache_get(ck) if ck else None
     if hit is not None:
         logger.info("ONLINE_CACHE_HIT user=%s tab=%s kw=%s", user, tab, keyword)
         return jsonify({"ok": True, "cached": True, "job_id": "",
