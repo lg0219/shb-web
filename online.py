@@ -27,6 +27,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
+import weekly_core  # noqa: E402  周计划公共算法层（本地/在线共用）
+import workload_core  # noqa: E402  工作量公共算法层（本地/在线共用）
+import debug_core  # noqa: E402  调试进度公共算法层（本地/在线共用）
+
 # ── 常量 ──────────────────────────────────────────────────────────────
 CFG = "/root/.config/shb-cli/config.json"
 CRED = "/root/.config/shb-cli/credentials.json"
@@ -708,86 +712,44 @@ def _task_persons(t, init):
 
 
 def q_weekly(params, progress, deadline):
+    """周计划 / 周总结（在线）
+
+    2026-11-12：计算逻辑抽到 weekly_core.build_weekly()，与本地报表共用同一套算法，只换数据源。
+    """
     mode = (params.get("mode") or "plan").strip()
     keyword = (params.get("keyword") or "").strip()      # 姓名筛选（2026-11-10 新增）
-    try:
-        d = datetime.strptime((params.get("week_start") or "").strip(), "%Y-%m-%d")
-    except Exception:
-        d = datetime.now()
-    monday = (d - timedelta(days=d.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    days = [monday + timedelta(days=i) for i in range(7)]
+    monday, days = weekly_core.week_days(params.get("week_start"))
 
     # 窗口：往前 365 天 ~ 本周末（保证「早已创建、本周才计划/执行」的单也在范围内）
     win_b = (monday - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
     win_e = days[-1].strftime("%Y-%m-%dT23:59:59")
     tasks = search_tasks(win_b, win_e, deadline=deadline, progress=progress)
-    week_end_ts = days[-1].replace(hour=23, minute=59, second=59)
 
-    # ── 第一遍：筛出与本周有交集的工单（三条业务规则等价于区间重叠）──
-    #   ① 开始/结束都在本周  ② 任一端在本周  ③ 跨过本周（开始早于周一、结束晚于周日）
+    # 只为与本周有交集的单取详情（与算法层同一判定，避免多余请求）
+    week_end_ts = days[-1].replace(hour=23, minute=59, second=59)
     pre = []
     for t in tasks:
-        if t.get("state") == "offed":           # 排除已取消（2026-11-02 修复口径）
+        if (t.get("state") or "") in ("offed",):
             continue
         if mode == "summary":
             st, en = ts_any(t.get("startTime")), ts_any(t.get("completeTime"))
         else:
-            # 周计划口径：计划开始为空 → 不取；有开始无结束 → 视为进行中，覆盖整周
             st, en = ts_any(t.get("planStartTime")), ts_any(t.get("planEndTime"))
         if not st:
             continue
         if not (st <= week_end_ts and (en is None or en >= monday)):
             continue
-        pre.append((t, st, en))
+        pre.append(t)
+    details = map_details(pre, deadline=deadline, progress=progress) if pre else {}
 
-    # ── 第二遍：取这些工单的详情，解析全部参与人（一单多人同时计入）──
-    details = map_details([t for t, _s, _e in pre],
-                          deadline=deadline, progress=progress) if pre else {}
-
-    items = []
-    for t, st, en in pre:
-        cust = ((t.get("customerEntity") or {}).get("name")
-                or (t.get("customer") or {}).get("name") or "")
-        for person in _task_persons(t, details.get(t.get("id"))):
-            if keyword and keyword not in person:
-                continue
-            items.append((t.get("taskNo"), t.get("templateName"), person, cust, st, en))
-
-    cells, person_tasks = {}, {}
-    for no, tname, person, cust, st, en in items:
-        for i, day in enumerate(days):
-            if st <= day.replace(hour=23, minute=59, second=59) and (en is None or en >= day):
-                cells.setdefault((i, person), []).append((no, tname, cust))
-                person_tasks.setdefault(person, set()).add(no)
-
-    counts = {p: len(v) for p, v in person_tasks.items()}
-    persons = sorted(counts, key=lambda p: (-counts[p], p))
-
-    head_cols = ["负责人"]
-    for i, day in enumerate(days):
-        head_cols.append("%s<br>%s" % (WEEKDAY_CN[i], day.strftime("%m-%d")))
-
-    out_rows = []
-    for p in persons:
-        row = {"负责人": esc(p) + "<br>" + str(counts[p])}
-        for i, day in enumerate(days):
-            parts = []
-            day_items = sorted(cells.get((i, p)) or [], key=lambda x: x[0] or "")
-            for n, (no, tname, cust) in enumerate(day_items, 1):
-                short = tname or ""
-                if short.endswith("工单") and len(short) > 2:
-                    short = short[:-2]
-                parts.append("%d. %s | %s" % (n, esc(short), esc(cust)))
-            row[head_cols[i + 1]] = "<br>".join(parts)
-        out_rows.append(row)
+    out = weekly_core.build_weekly(tasks, details, monday, days, mode=mode, keyword=keyword)
 
     return {"ok": True, "tab": "ol:weekly-plan", "title": TAB_TITLES["ol:weekly-plan"],
-            "mode": mode, "rows": out_rows, "columns": head_cols,
-            "total": len(out_rows), "page": 1, "page_size": max(1, len(out_rows)),
+            "mode": mode, "rows": out["rows"], "columns": out["columns"],
+            "total": len(out["rows"]), "page": 1, "page_size": max(1, len(out["rows"])),
             "has_next": False, "has_prev": False, "total_pages": 1,
-            "html_cells": True, "persons": persons, "online": True,
-            "week_start": monday.strftime("%Y-%m-%d"),
-            "week_end": days[-1].strftime("%Y-%m-%d")}
+            "html_cells": True, "persons": out["persons"], "online": True,
+            "week_start": out["week_start"], "week_end": out["week_end"]}
 
 
 # ── 报表 3：项目进度2（在线）────────────────────────────────────────
@@ -1076,83 +1038,22 @@ def person_work_hours(ins, outs, arrive_dt=None):
 
 
 def q_workload(params, progress, deadline):
+    """服务人员工作量（在线）
+
+    2026-11-12：计算抽到 workload_core.build_workload()，与本地报表共用同一套算法，只换数据源。
+    """
     kw = (params.get("keyword") or "").strip()
     b, e = rng(params, "week")            # 默认当周（周一~周日）
     tasks = search_tasks(b, e, deadline=deadline, progress=progress)
-
     details = map_details(tasks, deadline=deadline, progress=progress)
     records = map_records(tasks, deadline=deadline, progress=progress)
 
-    out = []
-    persons = set()
-    for t in tasks:
-        init = details.get(t.get("id")) or {}
-        task = init.get("task") or {}
-        recs = records.get(t.get("id")) or []
-        dep_ts = sorted({r.get("createTime") for r in recs
-                         if r.get("action") == "出发" and r.get("createTime")})
-        arr_ts = sorted({r.get("createTime") for r in recs
-                         if r.get("action") == "到达" and r.get("createTime")})
-        dep = ts_any(dep_ts[0]) if dep_ts else None
-        arr = ts_any(arr_ts[-1]) if arr_ts else None
-        extra = {"cardInfo": init.get("cardInfo"),
-                 "receiptTaskForUpdate": init.get("receiptTaskForUpdate")}
-        cust = task.get("customer") or {}
-        area = ""
-        for tag in (cust.get("tags") or []):
-            nm = (tag or {}).get("tagName") or ""
-            if "片区" in nm:
-                area = nm
-                break
-        addr = ((task.get("attribute") or {}).get("taskArriveAddress")
-                or task.get("taddressStr") or "")
-        base = {
-            "工单类型": t.get("templateName") or task.get("templateName") or "",
-            "客户编号": cust.get("serialNumber") or "",
-            "客户": ((t.get("customerEntity") or {}).get("name") or cust.get("name") or ""),
-            "服务部门": area,
-            "省份": _wl_province(extra, addr),
-            "出发打卡": dep.strftime("%Y-%m-%d %H:%M:%S") if dep else "",
-            "到场打卡": arr.strftime("%Y-%m-%d %H:%M:%S") if arr else "",
-            "途中时长": _wl_hours(dep, arr),
-        }
-        boss = (t.get("executorName")
-                or (t.get("executorUser") or {}).get("displayName")
-                or (task.get("executor") or {}).get("displayName") or "").strip()
-        sig = card_sign_records(extra)
-        if not sig:
-            row = dict(base)
-            row.update({"服务人员": boss, "角色": "负责人" if boss else "",
-                        "到场签到时间": "", "离场签到时间": "",
-                        "工单时长": "", "提示": "无签到记录", "__warn": 0, "__tips": ""})
-            out.append(row)
-            if boss:
-                persons.add(boss)
-            continue
-        # 一单多人 → 一人一行（负责人与协同人分开统计）
-        for user, rec in sig.items():
-            hours, used_in, used_out, tips = person_work_hours(rec["in"], rec["out"], arr)
-            row = dict(base)
-            row["服务人员"] = user
-            row["角色"] = "负责人" if user == boss else "协同人"
-            row["到场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_in)
-            row["离场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_out)
-            row["工单时长"] = hours if hours is not None else ""
-            row["提示"] = "；".join(tips)
-            row["__warn"] = 1 if tips else 0
-            row["__tips"] = "；".join(tips)
-            out.append(row)
-            persons.add(user)
-    # 关键字过滤（2026-11-11）：客户编号 / 客户 / 服务人员 / 工单类型
-    if kw:
-        out = [r for r in out
-               if kw in (r.get("客户编号") or "") or kw in (r.get("客户") or "")
-               or kw in (r.get("服务人员") or "") or kw in (r.get("工单类型") or "")]
-    return _resp("ol:workload", out, WORKLOAD_COLUMNS,
-                 persons=sorted({r["服务人员"] for r in out if r.get("服务人员")}))
+    out, persons = workload_core.build_workload(
+        tasks, details, records, kw,
+        ts=ts_any, cards=card_sign_records, hours=person_work_hours, province=_wl_province)
+    return _resp("ol:workload", out, WORKLOAD_COLUMNS, persons=persons)
 
 
-# ── 报表 5：调试进度（在线）──────────────────────────────────────────
 def _dp_ts(v):
     """动态 createTime（毫秒）→ 'YYYY-MM-DD HH:MM:SS'"""
     if not v:
@@ -1243,47 +1144,10 @@ def q_debug(params, progress, deadline):
                 if progress:
                     progress("已取 %d/%d 单" % (done, total))
 
-    rows = []
-    for t in tasks:
-        init = dmap.get(t.get("id")) or {}
-        task = init.get("task") or {}
-        cust = task.get("customer") or {}
-        serial = (cust.get("serialNumber") or t.get("customerId") or "")
-        cname = ((t.get("customerEntity") or {}).get("name") or cust.get("name") or "")
-        _sub_items = ((task.get("attribute") or {}).get(DBG_ITEMS_FIELD) or [])
-        _tmp_items = ((tmap.get(t.get("id")) or {}).get(DBG_ITEMS_FIELD) or [])
-        # 两边合并去重：暂存在前（同一 bizId 以暂存为准），再补已提交
-        items = list(_tmp_items) + list(_sub_items)
-        _seen, _uniq = set(), []
-        for it in items:
-            bid = (it or {}).get("bizId")
-            if not bid:
-                _persons = it.get(DBG_ITEM_PERSON) if isinstance(it.get(DBG_ITEM_PERSON), list) else []
-                bid = "%s|%s|%s" % (it.get(DBG_ITEM_CONTENT), it.get(DBG_ITEM_TIME),
-                                    (_persons[0] or {}).get("displayName") if _persons else "")
-            if bid in _seen:
-                continue
-            _seen.add(bid)
-            _uniq.append(it)
-        for it in _uniq:
-            content = str(it.get(DBG_ITEM_CONTENT) or "").strip()
-            names = "、".join([(u or {}).get("displayName") or ""
-                              for u in (it.get(DBG_ITEM_PERSON) or [])]).strip("、")
-            day = _dp_ts(it.get(DBG_ITEM_TIME))[:10]
-            if not content and not names:
-                continue
-            if date_filter and day and (day < b_day or day > e_day):
-                continue                      # 无关键字时按调试日期筛区间
-            if keyword and not any(keyword in str(x) for x in (serial, cname, names, content)):
-                continue
-            rows.append({"调试人员": names, "项目编码": serial, "客户名称": cname,
-                         "调试内容": content, "调试日期": day})
-
-    rows.sort(key=lambda r: (r["项目编码"] or "", r["调试日期"] or "", r["调试内容"] or ""))
-    out = []
-    for i, r in enumerate(rows, 1):
-        out.append({"序号": i, "调试人员": r["调试人员"], "项目编码": r["项目编码"],
-                    "客户名称": r["客户名称"], "调试内容": r["调试内容"], "调试日期": r["调试日期"]})
+    # 2026-11-12：行构建抽到 debug_core.build_debug()，与本地报表共用同一套算法
+    out = debug_core.build_debug(tasks, dmap, tmap, keyword,
+                                 date_filter=date_filter, b_day=b_day, e_day=e_day,
+                                 ts=_dp_ts)
     return _resp("ol:debug-progress", out, DEBUG_COLUMNS)
 
 

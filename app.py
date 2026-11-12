@@ -56,6 +56,9 @@ logger = logging.getLogger("shb-web")
 # 在线报表取数层（云端实时查询，与本地库完全隔离；2026-11-10 新增）
 sys.path.insert(0, BASE_DIR)
 import online as shb_online  # noqa: E402
+import weekly_core  # noqa: E402  周计划公共算法层（本地/在线共用）
+import workload_core  # noqa: E402  工作量公共算法层（本地/在线共用）
+import debug_core  # noqa: E402  调试进度公共算法层（本地/在线共用）
 
 # ── Tab 定义（未来加 Tab 只改这里） ──
 # display_fields: (字段key, 显示名)
@@ -128,10 +131,11 @@ STATION_VIEW_COLS = [
 PAAS_TAB_SKIP = {STATION_ENTITY}
 
 # ══ 本地业务结果 Tab（2026-09-23 新增）═══════════════════════════════════
-# 行程单 / 项目进度："查询"只读本地结果表；"保存"仅 admin（实时抓数→入库，后台任务）；"导出"= Excel
-RESULT_TITLES = {"trip": "行程单", "progress": "项目进度", "progress2": "项目进度2",
-                 "weekly-plan": "周计划", "users": "SHB用户",
-                  "workload": "服务人员工作量", "records": "工单动态", "debug-progress": "调试进度"}
+# 行程单 / 项目进度：“查询”只读本地结果表；“保存”仅 admin（实时抓数→入库，后台任务）；“导出”= Excel
+# 2026-11-12 hunter 定：本地去掉旧「项目进度」页签（原 progress），「项目进度2」改名为「项目进度」
+RESULT_TITLES = {"trip": "行程单", "weekly-plan": "周计划", "progress2": "项目进度",
+                  "workload": "服务人员工作量", "debug-progress": "调试进度",
+                 "records": "工单动态", "users": "SHB用户"}
 
 # ══ 在线报表（2026-11-10 新增，hunter 批准）═════════════════════════════
 # 独立分组「在线报表」：点查询直接调售后宝云端，与本地备份库完全无关。
@@ -285,7 +289,7 @@ def query_progress(serial, name, site, page, page_size):
             v = r[src] if src in keys else ""
             row[col] = "" if v is None else str(v)
         rows.append(row)
-    return {"ok": True, "tab": "progress", "title": RESULT_TITLES["progress"], "rows": rows,
+    return {"ok": True, "tab": "progress", "title": "项目进度（旧版已下线）", "rows": rows,
             "columns": list(PROGRESS_COLUMNS), "total": total, "page": page, "page_size": page_size,
             "has_next": page * page_size < total, "has_prev": page > 1,
             "total_pages": max(1, (total + page_size - 1) // page_size),
@@ -448,80 +452,60 @@ def _wl_hours(a, b):
     return round((b - a).total_seconds() / 3600.0, 1)
 
 
-def query_workload(month, person, page, page_size):
-    """服务人员工作量：按月份（+可选人员）出 12 列"""
-    month = month or datetime.now().strftime("%Y-%m")
+def query_workload(date_begin="", date_end="", keyword="", page=1, page_size=50):
+    """服务人员工作量（只读本地库）
+
+    2026-11-12：与在线版共用 workload_core.build_workload()，只换数据源；
+    筛选条件同在线：建单日期区间（默认当周）+ 关键字（客户编号/客户/服务人员/工单类型）
+    """
+    # 默认当周（周一~周日），与在线 rng(params,"week") 一致
+    today = datetime.now()
+    try:
+        d0 = datetime.strptime((date_begin or "").strip(), "%Y-%m-%d")
+    except Exception:
+        d0 = today
+    mon = (d0 - timedelta(days=d0.weekday()))
+    b = (date_begin or "").strip() or mon.strftime("%Y-%m-%d")
+    e = (date_end or "").strip() or (mon + timedelta(days=6)).strftime("%Y-%m-%d")
+
     conn = backup_conn()
     try:
-        sql = ("select t.id, t.task_no, t.template_name, t.customer_name, t.executor_name, t.taddress_str, "
-               "       r.detail_json, r.extra_json "
-               "  from tasks t left join task_raw r on r.id = t.id "
-               " where coalesce(t.deleted,0)=0 and t.create_time like ?")
-        args = [month + "%"]
-        sql += " order by t.create_time"
-        rows_db = conn.execute(sql, args).fetchall()
+        rowsdb = conn.execute(
+            "select t.id, t.task_no, t.template_name, t.executor_name, t.customer_name, "
+            "       r.detail_json, r.extra_json "
+            "  from tasks t left join task_raw r on r.id = t.id "
+            " where coalesce(t.deleted,0)=0 "
+            "   and coalesce(t.create_time,'') >= ? and coalesce(t.create_time,'') <= ? "
+            " order by t.create_time",
+            (b, e + " 23:59:59")).fetchall()
         recs = {}
         for r in conn.execute("select task_id, action, create_time from task_records"):
-            recs.setdefault((r["task_id"], r["action"]), []).append(r["create_time"])
-        persons = [r["executor_name"] for r in conn.execute(
-            "select distinct executor_name from tasks where coalesce(deleted,0)=0 "
-            "and coalesce(executor_name,'')<>'' order by executor_name") if r["executor_name"]]
+            recs.setdefault(r["task_id"], []).append(
+                {"action": r["action"], "createTime": r["create_time"]})
     finally:
         conn.close()
 
-    out = []
-    for r in rows_db:
-        detail, extra = {}, {}
+    tasks, details = [], {}
+    for r in rowsdb:
+        dj, ej = {}, {}
         try:
-            detail = json.loads(r["detail_json"]) if r["detail_json"] else {}
-            extra = json.loads(r["extra_json"]) if r["extra_json"] else {}
+            dj = json.loads(r["detail_json"]) if r["detail_json"] else {}
+            ej = json.loads(r["extra_json"]) if r["extra_json"] else {}
         except Exception:
             pass
         tid = r["id"]
-        days = recs.get((tid, "出发")) or []
-        arrs = recs.get((tid, "到达")) or []
-        dep = _wl_dt(min(days)) if days else None
-        arr = _wl_dt(max(arrs)) if arrs else None
-        cust_no = (detail.get("customer") or {}).get("serialNumber") or ""
-        base = {
-            "工单类型": r["template_name"] or "",
-            "客户编号": cust_no,
-            "客户": r["customer_name"] or "",
-            "服务部门": _wl_area(detail),
-            "省份": _wl_province(extra, (detail.get("attribute") or {}).get("taskArriveAddress") or r["taddress_str"]),
-            "出发打卡": dep.strftime("%Y-%m-%d %H:%M:%S") if dep else "",
-            "到场打卡": arr.strftime("%Y-%m-%d %H:%M:%S") if arr else "",
-            "途中时长": _wl_hours(dep, arr),
-        }
-        boss = (r["executor_name"] or "").strip()
-        sig = shb_online.card_sign_records(extra)
-        if not sig:
-            row = dict(base)
-            row.update({"服务人员": boss, "角色": "负责人" if boss else "",
-                        "到场签到时间": "", "离场签到时间": "",
-                        "工单时长": "", "提示": "无签到记录", "__warn": 0, "__tips": ""})
-            out.append(row)
-            continue
-        # 一单多人 → 一人一行（负责人与协同人分开统计，2026-11-11）
-        for user, rec in sig.items():
-            hours, used_in, used_out, tips = shb_online.person_work_hours(
-                rec["in"], rec["out"], arr)
-            row = dict(base)
-            row["服务人员"] = user
-            row["角色"] = "负责人" if user == boss else "协同人"
-            row["到场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_in)
-            row["离场签到时间"] = "、".join(x.strftime("%m-%d %H:%M") for x in used_out)
-            row["工单时长"] = hours if hours is not None else ""
-            row["提示"] = "；".join(tips)
-            row["__warn"] = 1 if tips else 0
-            row["__tips"] = "；".join(tips)
-            out.append(row)
+        tasks.append({
+            "id": tid, "taskNo": r["task_no"], "templateName": r["template_name"],
+            "executorName": r["executor_name"], "customerEntity": r["customer_name"],
+        })
+        details[tid] = {"task": dj,
+                        "cardInfo": ej.get("cardInfo"),
+                        "receiptTaskForUpdate": ej.get("receiptTaskForUpdate")}
 
-    # 关键字过滤（2026-11-11）：客户编号 / 客户 / 服务人员 / 工单类型
-    if person:
-        out = [r for r in out
-               if person in (r.get("客户编号") or "") or person in (r.get("客户") or "")
-               or person in (r.get("服务人员") or "") or person in (r.get("工单类型") or "")]
+    out, persons = workload_core.build_workload(
+        tasks, details, recs, keyword,
+        ts=shb_online.ts_any, cards=shb_online.card_sign_records,
+        hours=shb_online.person_work_hours, province=shb_online._wl_province)
 
     total = len(out)
     start = (page - 1) * page_size
@@ -530,49 +514,35 @@ def query_workload(month, person, page, page_size):
             "total": total, "page": page, "page_size": page_size,
             "has_next": page * page_size < total, "has_prev": page > 1,
             "total_pages": max(1, (total + page_size - 1) // page_size),
-            "month": month, "persons": persons}
+            "saved_at": _meta_value("workload_last_save_at"),
+            "persons": persons}
 
 
-# ══ 项目进度2（2026-10-27 新增）════════════════════════════════════════
-# 口径：本地客户档案取数，一行一客户编号；12 个日期字段任一非空才显示；
-#      调试人员 = 调试工单负责人 + 协同人（逗号隔开）；运行日期 = 保运完毕日期。
-PROGRESS2_COLUMNS = [
-    "客户编号", "客户名称",
-    "设备发货日期", "安装开始日期", "安装完毕日期", "工程验收日期",
-    "调试物品发货日期", "调试开始日期", "调试完毕日期", "调试人员",
-    "消防验收日期", "计量验收日期", "充装验收日期",
-    "保运开始日期", "保运完毕日期", "保运人员", "运行日期",
-]
-P2_DATE_FIELDS = [
-    ("field_4Du9tW3FdX5ofNd7", "设备发货日期"),
-    ("field_pWtw8xgz7KTQVXaV", "安装开始日期"),
-    ("field_XIbL8TbFkaQO7yCq", "安装完毕日期"),
-    ("field_DM2DAoBb203rhrVf", "工程验收日期"),
-    ("field_uBS7HOVJAndqk3On", "调试物品发货日期"),
-    ("field_d2P4mgHXg1Cmrl9N", "调试开始日期"),
-    ("field_aizN4CQl2gOZpJea", "调试完毕日期"),
-    ("field_LJtmwhb97rF9YfZm", "消防验收日期"),
-    ("field_iW3hzpnLhqiOCkPa", "计量验收日期"),
-    ("field_buJ9ddsuAZn8nvDp", "充装验收日期"),
-    ("field_2gfjf8Zl09aWwuab", "保运开始日期"),
-    ("field_Brf7x05dyDVU9HOL", "保运完毕日期"),
-]
-P2_BAOYUN_PERSON = "field_Yc3YHI7w2qowAOZP"   # 保运人员
-
-
-def query_progress2(keyword, cust_name, page, page_size, show_done=False):
+def query_progress2(keyword, cust_name, page, page_size, show_done=False,
+                    date_begin="", date_end=""):
     """项目进度2：客户档案 17 列（只读本地库）
-    show_done：是否包含已完成项目（运行日期 = 保运完毕日期 非空即已完成）"""
+
+    show_done：是否包含已完成项目（运行日期 = 保运完毕日期 非空即已完成）
+    日期筛选（2026-11-12，与在线版同口径）：
+      · 有填关键字 → 关键字优先，不限时间
+      · 否则按「客户档案最后更新日期」(entities.updated_at) 筛；留空 = 不限
+    """
+    date_begin = (date_begin or "").strip()
+    date_end = (date_end or "").strip()
+    use_date = bool(date_begin or date_end) and not keyword
     conn = backup_conn()
     try:
         want = ["serialNumber", "name"] + [f for f, _ in P2_DATE_FIELDS] + [P2_BAOYUN_PERSON]
         ph = ",".join("?" * len(want))
-        vals = {}
+        vals, upd = {}, {}
         for a in conn.execute(
-                "select entity_id, field_name, value_text from entity_attrs "
-                "where entity_type='customer' and field_name in (" + ph + ")",
+                "select ea.entity_id, ea.field_name, ea.value_text, e.updated_at "
+                "from entity_attrs ea left join entities e "
+                "on e.entity_type='customer' and e.id=ea.entity_id "
+                "where ea.entity_type='customer' and ea.field_name in (" + ph + ")",
                 want).fetchall():
             vals.setdefault(a["entity_id"], {})[a["field_name"]] = (a["value_text"] or "").strip()
+            upd[a["entity_id"]] = a["updated_at"] or ""
 
         # 调试工单 → 客户名：负责人 + 协同人（去重、保序）
         persons = {}
@@ -597,11 +567,25 @@ def query_progress2(keyword, cust_name, page, page_size, show_done=False):
                     nm = ((s or {}).get("displayName") or "").strip()
                     if nm and nm not in names:
                         names.append(nm)
+                # 2026-11-12：补转派协同人（与在线版口径一致）
+                for s in (dd.get("reAllotUserList")
+                          or (dd.get("attribute") or {}).get("reAllotUserList") or []):
+                    nm = ((s or {}).get("userName") or (s or {}).get("displayName") or "").strip()
+                    if nm and nm not in names:
+                        names.append(nm)
 
         rows, seen = [], set()
         for _eid, m in vals.items():
             serial = m.get("serialNumber", "")
             cname = m.get("name", "")
+            # 日期筛选：按客户档案最后更新日期（有关键字时不生效）
+            if use_date:
+                _ut = (upd.get(_eid) or "")[:10]
+                if _ut:
+                    if date_begin and _ut < date_begin:
+                        continue
+                    if date_end and _ut > date_end:
+                        continue
             if keyword and keyword not in serial and keyword not in cname:
                 continue
             if cust_name and cust_name not in cname:
@@ -696,115 +680,53 @@ def _wp_parse_ts(v):
     return None
 
 
-def query_weekly_plan(week_start="", mode="plan"):
+def query_weekly_plan(week_start="", mode="plan", keyword=""):
     """周计划 / 周总结（只读本地库，不写库）
 
-    mode=plan    ：工单计划开始 / 计划结束时间（主表）
-    mode=summary ：工单详情里的实际开始 / 完成时间；未完成视为持续进行（覆盖到该周周日）
+    2026-11-12：与在线版共用 weekly_core.build_weekly()，只换数据源（本地 SQLite 备份库）
+    mode=plan    ：计划开始 / 计划结束
+    mode=summary ：实际开始 / 完成时间；未完成视为持续进行
     """
-    try:
-        d = datetime.strptime((week_start or "").strip(), "%Y-%m-%d")
-    except Exception:
-        d = datetime.now()
-    monday = (d - timedelta(days=d.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    days = [monday + timedelta(days=i) for i in range(7)]
-
     conn = backup_conn()
     try:
-        items = []
-        if mode == "summary":
-            for r in conn.execute(
-                    "select t.task_no, t.template_name, t.executor_name, t.customer_name, "
-                    "       json_extract(r.detail_json,'$.startTime') st, "
-                    "       json_extract(r.detail_json,'$.completeTime') ct "
-                    "  from tasks t join task_raw r on r.id = t.id "
-                    " where coalesce(t.deleted,0)=0 and coalesce(t.executor_name,'')<>''"
-                    "   and t.state_cn != '已取消'"
-                    ).fetchall():
-                st = _wp_parse_ts(r["st"])
-                if not st:
-                    continue
-                items.append((r["task_no"], r["template_name"], r["executor_name"],
-                              r["customer_name"], st, _wp_parse_ts(r["ct"])))
-        else:
-            for r in conn.execute(
-                    "select task_no, template_name, executor_name, customer_name, "
-                    "       plan_start_time, plan_end_time "
-                    "  from tasks "
-                    " where coalesce(deleted,0)=0 and coalesce(executor_name,'')<>'' "
-                    "   and coalesce(plan_start_time,'')<>'' and coalesce(plan_end_time,'')<>''"
-                    "   and state_cn != '已取消'"
-                    ).fetchall():
-                st = _wp_parse_ts(r["plan_start_time"])
-                en = _wp_parse_ts(r["plan_end_time"])
-                if not st or not en:
-                    continue
-                items.append((r["task_no"], r["template_name"], r["executor_name"],
-                              r["customer_name"], st, en))
-        norm = _wp_customer_norm(conn, [it[3] for it in items])
+        rowsdb = conn.execute(
+            "select t.id, t.task_no, t.template_name, t.executor_name, t.customer_name, "
+            "       t.state_cn, t.plan_start_time, t.plan_end_time, r.detail_json "
+            "  from tasks t left join task_raw r on r.id = t.id "
+            " where coalesce(t.deleted,0)=0").fetchall()
     finally:
         conn.close()
 
-    # 逐天 × 逐人 命中集合（summary 模式下 en 为空 → 视为持续，命中后续每一天）
-    cells, person_tasks = {}, {}
-    for no, tname, person, cust, st, en in items:
-        for i, day in enumerate(days):
-            if st <= day.replace(hour=23, minute=59, second=59) and (en is None or en >= day):
-                cells.setdefault((i, person), []).append((no, tname, cust))
-                person_tasks.setdefault(person, set()).add(no)
+    tasks, details = [], {}
+    for r in rowsdb:
+        dj = {}
+        if r["detail_json"]:
+            try:
+                dj = json.loads(r["detail_json"])
+            except Exception:
+                dj = {}
+        tid = r["id"]
+        tasks.append({
+            "id": tid, "taskNo": r["task_no"], "templateName": r["template_name"],
+            "executorName": r["executor_name"], "customer": r["customer_name"],
+            "state": r["state_cn"],
+            "planStartTime": r["plan_start_time"], "planEndTime": r["plan_end_time"],
+            "startTime": dj.get("startTime"), "completeTime": dj.get("completeTime"),
+        })
+        details[tid] = {"task": {"executor": dj.get("executor"),
+                                 "synergies": dj.get("synergies") or []}}
 
-    counts = {p: len(v) for p, v in person_tasks.items()}
-    persons = sorted(counts, key=lambda p: (-counts[p], p))
-
-    head_cols = ["负责人"]
-    for i, day in enumerate(days):
-        head_cols.append("%s<br>%s" % (WEEKDAY_CN[i], day.strftime("%m-%d")))
-
-    out_rows = []
-    for p in persons:
-        row = {"负责人": _wp_escape(p) + "<br>" + str(counts[p])}
-        for i, day in enumerate(days):
-            parts = []
-            day_items = sorted(cells.get((i, p)) or [], key=lambda x: x[0] or "")
-            for n, (no, tname, cust) in enumerate(day_items, 1):
-                parts.append("%d.%s<br>%s | %s" % (
-                    n, _wp_escape(no),
-                    _wp_escape(_wp_short_type(tname)),
-                    _wp_escape(norm(cust))))
-            row[head_cols[i + 1]] = "<br>".join(parts)
-        out_rows.append(row)
+    monday, days = weekly_core.week_days(week_start)
+    out = weekly_core.build_weekly(tasks, details, monday, days, mode=mode, keyword=keyword)
 
     return {"ok": True, "tab": "weekly-plan", "title": RESULT_TITLES["weekly-plan"],
             "mode": mode,
-            "rows": out_rows, "columns": head_cols,
-            "total": len(out_rows), "page": 1, "page_size": len(out_rows),
+            "rows": out["rows"], "columns": out["columns"],
+            "total": len(out["rows"]), "page": 1, "page_size": max(1, len(out["rows"])),
             "has_next": False, "has_prev": False, "total_pages": 1,
             "html_cells": True,
-            "week_start": monday.strftime("%Y-%m-%d"),
-            "week_end": days[-1].strftime("%Y-%m-%d"),
-            "persons": persons}
-
-
-# 工单主表展示列（顺序即表头顺序）
-BACKUP_MAIN_COLUMNS = [
-    ("task_no", "工单编号"),
-    ("state_cn", "状态"),
-    ("customer_name", "客户"),
-    ("description", "描述"),
-    ("level", "等级"),
-    ("service_type", "服务类型"),
-    ("executor_name", "负责人"),
-    ("create_user_name", "创建人"),
-    ("tlm_name", "项目负责人"),
-    ("tlm_phone", "联系电话"),
-    ("taddress_str", "地址"),
-    ("plan_start_time", "计划开始"),
-    ("plan_end_time", "计划结束"),
-    ("create_time", "创建时间"),
-    ("update_time", "更新时间"),
-    ("accept_time", "受理时间"),
-    ("allot_time", "分派时间"),
-]
+            "week_start": out["week_start"], "week_end": out["week_end"],
+            "persons": out["persons"]}
 
 
 def backup_conn():
@@ -837,151 +759,65 @@ def _dp_ts(s):
     return s
 
 
-def query_debug_progress(keyword, month, page, page_size):
-    """调试进度表（只读）：tasks 静态 + task_records 动态。不写库。"""
+def query_debug_progress(keyword, date_begin="", date_end="", page=1, page_size=200):
+    """调试进度（明细，只读本地库）
+
+    2026-11-12：与在线共用 debug_core.build_debug()，只换数据源。
+      · 有填关键字 → 不限时间、结果不按调试日期筛（与在线同口径）
+      · 无关键字   → 只查最近 30 天建单的工单，并按调试日期筛所选区间（默认当周）
+      · 本地无「节点暂存」数据 → 只显示已提交的调试项（在线的暂存项本地看不到）
+    """
+    keyword = (keyword or "").strip()
+    today = datetime.now()
+    try:
+        d0 = datetime.strptime((date_begin or "").strip(), "%Y-%m-%d")
+    except Exception:
+        d0 = today
+    mon = d0 - timedelta(days=d0.weekday())
+    b_day = (date_begin or "").strip() or mon.strftime("%Y-%m-%d")
+    e_day = (date_end or "").strip() or (mon + timedelta(days=6)).strftime("%Y-%m-%d")
+    date_filter = not keyword
+
     conn = backup_conn()
     try:
-        sql_t = ("select t.id, t.task_no, t.customer_id, t.customer_name, t.executor_name, "
-                 "       t.create_time, t.accept_time "
-                 "  from tasks t where t.template_id=? and coalesce(t.deleted,0)=0")
-        args_t = [DEBUG_TASK_TID]
+        sql = ("select t.id, t.task_no, t.customer_name, t.create_time, r.detail_json "
+               "  from tasks t left join task_raw r on r.id = t.id "
+               " where t.template_id=? and coalesce(t.deleted,0)=0")
+        args = [DEBUG_TASK_TID]
         if keyword:
-            sql_t += " and (t.task_no like ? or t.customer_name like ? or coalesce(t.customer_id,'') like ?)"
-            args_t += [f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"]
-        if month:
-            sql_t += " and t.create_time like ?"
-            args_t.append(month + "%")
-        rows_t = conn.execute(sql_t + " order by t.create_time", args_t).fetchall()
-        static = {r["id"]: dict(r) for r in rows_t}
-        serial_by_task = {}
-        persons_by_task = {}
-        for sid in static:
-            tr = conn.execute("select detail_json, extra_json from task_raw where id=?", (sid,)).fetchone()
-            dd = {}
-            if tr and tr["detail_json"]:
-                try:
-                    dd = json.loads(tr["detail_json"])
-                except Exception:
-                    dd = {}
-            serial_by_task[sid] = (dd.get("customer") or {}).get("serialNumber") or static[sid].get("customer_id") or ""
-            persons = [static[sid].get("executor_name") or ""]
-            for u in (dd.get("reAllotUserList") or []):
-                nm = (u or {}).get("userName") or (u or {}).get("displayName") or ""
-                if nm and nm not in persons:
-                    persons.append(nm)
-            persons_by_task[sid] = ",".join([p for p in persons if p])
-        dyn = {}
-        for r in conn.execute(
-                "select task_id, action, create_time, content from task_records "
-                "where action in ('出发','到达','卡片','完成') and task_id in "
-                "(" + ",".join("?" * len(static)) + ")",
-                list(static.keys())):
-            d = dyn.setdefault(r["task_id"], {})
-            ct = r["create_time"] or ""
-            act = r["action"] or ""
-            if act == "出发":
-                d.setdefault("出发", []).append(ct)
-            elif act == "到达":
-                d.setdefault("到达", []).append(ct)
-            elif act == "卡片":
-                d.setdefault("卡片", []).append((ct, r["content"] or ""))
-            elif act == "完成":
-                d.setdefault("完成", []).append(ct)
-        out = []
-        agg = {}
-        for sid in sorted(static):
-            s = static[sid]
-            d = dyn.get(sid) or {}
-            dep_ts = sorted({str(x) for x in (d.get("出发") or []) if x})
-            arr_ts = sorted({str(x) for x in (d.get("到达") or []) if x})
-            dep_s = _dp_ts(dep_ts[0]) if dep_ts else ""
-            arr_s = _dp_ts(arr_ts[0]) if arr_ts else ""
-            dbg_parts = []
-            for ct, content in (d.get("卡片") or []):
-                inner = content
-                if isinstance(inner, str):
-                    try:
-                        inner = json.loads(inner)
-                    except Exception:
-                        inner = {}
-                v2 = inner.get("value") if isinstance(inner, dict) else None
-                if isinstance(v2, str):
-                    try:
-                        v2 = json.loads(v2)
-                    except Exception:
-                        v2 = None
-                if isinstance(v2, dict):
-                    parts = [str(v2.get(k)) for k in ("content", "time", "person") if v2.get(k)]
-                    if parts:
-                        dbg_parts.append("/".join(parts))
-            dbg_txt = ";".join(dbg_parts)
-            done_cts = [str(x) for x in (d.get("完成") or []) if x]
-            done_n = len({x for x in done_cts})
-            card_n = len({str(x) for x, _c in (d.get("卡片") or []) if x})
-            fin_date = _dp_ts(min(done_cts)) if done_cts else ""
-
-            # ── 按客户编号聚合（一行一个客户）──
-            key = serial_by_task.get(sid, "") or s.get("customer_id") or sid
-            a = agg.setdefault(key, {
-                "项目编号": key, "项目名称": "", "调试人": [],
-                "建单时间": [], "接受时间": [], "出发时间": [], "达到时间": [],
-                "调试内容": [], "完成数": 0, "总数": 0, "完成日期": [],
-            })
-            if not a["项目名称"] and s.get("customer_name"):
-                a["项目名称"] = s.get("customer_name")
-            for p in (persons_by_task.get(sid, "") or "").split(","):
-                p = p.strip()
-                if p and p not in a["调试人"]:
-                    a["调试人"].append(p)
-            if s.get("create_time"):
-                a["建单时间"].append(str(s["create_time"]))
-            if s.get("accept_time"):
-                a["接受时间"].append(str(s["accept_time"]))
-            if dep_s:
-                a["出发时间"].append(dep_s)
-            if arr_s:
-                a["达到时间"].append(arr_s)
-            if dbg_txt and dbg_txt not in a["调试内容"]:
-                a["调试内容"].append(dbg_txt)
-            a["完成数"] += done_n
-            a["总数"] += card_n
-            if fin_date:
-                a["完成日期"].append(fin_date)
-
-        def _mn(vs):
-            return min(vs) if vs else ""
-
-        def _mx(vs):
-            return max(vs) if vs else ""
-
-        def _unf(val):
-            return val if val else "未填"
-
-        for key in sorted(agg):
-            a = agg[key]
-            done_n, card_n = a["完成数"], a["总数"]
-            out.append({
-                "项目编号": a["项目编号"],
-                "项目名称": a["项目名称"],
-                "调试人": ",".join(a["调试人"]),
-                "建单时间": _unf(_mn(a["建单时间"])),
-                "接受时间": _unf(_mn(a["接受时间"])),
-                "出发时间": _unf(_mn(a["出发时间"])),
-                "达到时间": _unf(_mn(a["达到时间"])),
-                "调试内容/时间/调试人": ";".join(a["调试内容"]),
-                "完成数/总数": f"{done_n}/{card_n}" if (done_n or card_n) else "未填",
-                "完成日期": _unf(_mx(a["完成日期"])),
-            })
-        out.sort(key=lambda r: (r.get("项目编号") or ""))
-        total = len(out)
-        start = (page - 1) * page_size
-        return {"ok": True, "tab": "debug-progress", "title": RESULT_TITLES.get("debug-progress"),
-                "rows": out[start:start + page_size], "columns": list(DEBUG_PROGRESS_COLUMNS),
-                "total": total, "page": page, "page_size": page_size,
-                "has_next": page * page_size < total, "has_prev": page > 1,
-                "total_pages": max(1, (total + page_size - 1) // page_size), "saved_at": ""}
+            sql += " and (t.task_no like ? or t.customer_name like ?)"
+            args += ["%" + keyword + "%", "%" + keyword + "%"]
+        else:
+            win_b = (datetime.strptime(b_day, "%Y-%m-%d") - timedelta(days=30)).strftime("%Y-%m-%d")
+            sql += " and coalesce(t.create_time,'') >= ? and coalesce(t.create_time,'') <= ?"
+            args += [win_b, e_day + " 23:59:59"]
+        rowsdb = conn.execute(sql, args).fetchall()
     finally:
         conn.close()
+
+    tasks, details = [], {}
+    for r in rowsdb:
+        dj = {}
+        if r["detail_json"]:
+            try:
+                dj = json.loads(r["detail_json"])
+            except Exception:
+                dj = {}
+        tasks.append({"id": r["id"], "taskNo": r["task_no"],
+                      "customerEntity": r["customer_name"]})
+        details[r["id"]] = {"task": dj}
+
+    out = debug_core.build_debug(tasks, details, {}, keyword,
+                                 date_filter=date_filter, b_day=b_day, e_day=e_day,
+                                 ts=shb_online._dp_ts)
+
+    total = len(out)
+    start = (page - 1) * page_size
+    return {"ok": True, "tab": "debug-progress", "title": RESULT_TITLES["debug-progress"],
+            "rows": out[start:start + page_size], "columns": list(debug_core.DEBUG_COLUMNS),
+            "total": total, "page": page, "page_size": page_size,
+            "has_next": page * page_size < total, "has_prev": page > 1,
+            "total_pages": max(1, (total + page_size - 1) // page_size)}
 
 
 def list_backup_types():
@@ -1989,20 +1825,24 @@ def api_search():
             elif tab == "users":
                 resp = query_users(keyword, (request.args.get("kw2") or "").strip(), page, page_size)
             elif tab == "workload":
-                resp = query_workload((request.args.get("kw2") or "").strip(), keyword, page, page_size)
+                resp = query_workload(date_begin, date_end, keyword, page, page_size)
             elif tab == "records":
                 resp = query_records((request.args.get("kw2") or "").strip(), keyword,
                                      (request.args.get("kw3") or "").strip(), page, page_size)
             elif tab == "progress2":
                 resp = query_progress2(keyword, (request.args.get("kw2") or "").strip(),
                                        page, page_size,
-                                       show_done=(request.args.get("show_done") == "1"))
+                                       show_done=(request.args.get("show_done") == "1"),
+                                       date_begin=(request.args.get("date_begin") or "").strip(),
+                                       date_end=(request.args.get("date_end") or "").strip())
             elif tab == "weekly-plan":
                 resp = query_weekly_plan((request.args.get("week_start") or "").strip(),
-                                         (request.args.get("mode") or "plan").strip())
+                                         (request.args.get("mode") or "plan").strip(),
+                                         (request.args.get("keyword") or "").strip())
             elif tab == "debug-progress":
                 resp = query_debug_progress((request.args.get("keyword") or "").strip(),
-                                            (request.args.get("month") or "").strip(),
+                                            (request.args.get("date_begin") or "").strip(),
+                                            (request.args.get("date_end") or "").strip(),
                                             page, page_size)
             else:
                 resp = query_progress(keyword, (request.args.get("kw2") or "").strip(),
@@ -2469,6 +2309,39 @@ def _sync_last(key):
         conn.close()
 
 
+_SYNC_SCHED_CACHE = {"ts": 0.0, "data": None}
+
+
+def sync_schedule_info():
+    """定时备份排期（2026-11-12 hunter 定：同步中心页底部展示）
+
+    读 `openclaw cron list --json`，取周增量 / 季度全量两个任务的表达式与下次执行时间；
+    结果缓存 10 分钟，失败返回 ok=False（前端显示固定文案）。
+    """
+    now = time.time()
+    if _SYNC_SCHED_CACHE["data"] is not None and now - _SYNC_SCHED_CACHE["ts"] < 600:
+        return _SYNC_SCHED_CACHE["data"]
+    out = {"ok": False, "weekly": None, "quarterly": None}
+    try:
+        p = subprocess.run(["/usr/bin/openclaw", "cron", "list", "--json"],
+                           capture_output=True, text=True, timeout=20)
+        d = json.loads(p.stdout or "{}")
+        for j in (d.get("jobs") or []):
+            nm = j.get("name") or ""
+            if nm not in ("shb-task-sync-weekly", "shb-task-sync-quarterly"):
+                continue
+            nx = (j.get("state") or {}).get("nextRunAtMs")
+            out["weekly" if nm.endswith("weekly") else "quarterly"] = {
+                "expr": (j.get("schedule") or {}).get("expr") or "",
+                "next": datetime.fromtimestamp(nx / 1000).strftime("%Y-%m-%d %H:%M") if nx else "",
+            }
+        out["ok"] = bool(out["weekly"] or out["quarterly"])
+    except Exception as e:
+        logger.warning("SYNC_SCHED_FAIL %s", e)
+    _SYNC_SCHED_CACHE.update({"ts": now, "data": out})
+    return out
+
+
 @app.route("/api/sync/status")
 def api_sync_status():
     user = request.headers.get("X-Remote-User", "") or "admin"
@@ -2485,7 +2358,7 @@ def api_sync_status():
                       "writes": cfg["writes"], "param": cfg["param"],
                       "last": _sync_last(key), "running": bool(running),
                       "running_status": (running or {}).get("status")})
-    return jsonify({"ok": True, "tasks": tasks})
+    return jsonify({"ok": True, "tasks": tasks, "schedule": sync_schedule_info()})
 
 
 @app.route("/api/sync", methods=["POST"])

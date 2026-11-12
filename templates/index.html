@@ -371,9 +371,12 @@ const RESULT_FORMS = {
   progress2: [
     {id:'p2_serial', label:'客户编号', ph:'如 BY2023148'},
     {id:'p2_name', label:'客户名称', ph:'客户名称'},
+    {id:'p2d_begin', label:'日期从', type:'date', tip:'客户档案的最后更新日期（留空=不限）'},
+    {id:'p2d_end', label:'日期至', type:'date', tip:'客户档案的最后更新日期（留空=不限）'},
     {id:'p2_done', label:'显示已完成', type:'checkbox'}
   ],
   'weekly-plan': [
+    {id:'wp_kw', label:'姓名', ph:'姓名（空=全部）'},
     {id:'wp_week', label:'周（任选该周内一天）', type:'date'}
   ],
   users: [
@@ -382,7 +385,8 @@ const RESULT_FORMS = {
   ],
   workload: [
     {id:'wl_person', label:'关键字', ph:'客户编号/客户/服务人员/工单类型'},
-    {id:'wl_month', label:'月份', type:'month'}
+    {id:'wl_begin', label:'日期从', type:'date'},
+    {id:'wl_end', label:'日期至', type:'date'}
   ],
   records: [
     {id:'rec_month', label:'月份', type:'month'},
@@ -390,8 +394,9 @@ const RESULT_FORMS = {
     {id:'rec_action', label:'操作', ph:'如 出发、到达、卡片'}
   ],
   'debug-progress': [
-    {id:'debug_month', label:'月份', type:'month', ph:'建单时间（可空=全部）'},
-    {id:'debug_kw', label:'关键字', ph:'工单编号/客户编号/客户名（可空=全部）'}
+    {id:'debug_kw', label:'关键字', ph:'工单编号/客户编号/客户名（可空=全部）'},
+    {id:'debug_begin', label:'日期从', type:'date', tip:'实际调试完成日期'},
+    {id:'debug_end', label:'日期至', type:'date', tip:'实际调试完成日期'}
   ]
 };
 
@@ -497,12 +502,26 @@ function buildResultForm(tab) {
   box.innerHTML = html;
   const m = document.getElementById('trip_month');
   if (m && !m.value) m.value = new Date().toISOString().slice(0,7);
-  const wm = document.getElementById('wl_month');
-  if (wm && !wm.value) wm.value = new Date().toISOString().slice(0,7);
+  // 工作量默认日期：当周（周一~周日），与在线一致
+  const _wb = document.getElementById('wl_begin'), _we = document.getElementById('wl_end');
+  if (_wb || _we) {
+    const _n = new Date();
+    const _mon = new Date(_n); _mon.setDate(_n.getDate() - ((_n.getDay() + 6) % 7));
+    const _sun = new Date(_mon); _sun.setDate(_mon.getDate() + 6);
+    if (_wb && !_wb.value) _wb.value = _isoDate(_mon);
+    if (_we && !_we.value) _we.value = _isoDate(_sun);
+  }
   const rm = document.getElementById('rec_month');
   if (rm && !rm.value) rm.value = new Date().toISOString().slice(0,7);
-  const dm = document.getElementById('debug_month');
-  if (dm && !dm.value) dm.value = new Date().toISOString().slice(0,7);
+  // 调试进度默认日期：当周（周一~周日），与在线一致
+  const _db = document.getElementById('debug_begin'), _de2 = document.getElementById('debug_end');
+  if (_db || _de2) {
+    const _n2 = new Date();
+    const _mon2 = new Date(_n2); _mon2.setDate(_n2.getDate() - ((_n2.getDay() + 6) % 7));
+    const _sun2 = new Date(_mon2); _sun2.setDate(_mon2.getDate() + 6);
+    if (_db && !_db.value) _db.value = _isoDate(_mon2);
+    if (_de2 && !_de2.value) _de2.value = _isoDate(_sun2);
+  }
   const wk = document.getElementById('wp_week');
   if (wk && !wk.value) {
     const _td = new Date();
@@ -591,7 +610,9 @@ async function doSave() {
     const m = (document.getElementById('trip_month')||{}).value;
     if (m) params.set('month', m);
   } else if (tab === 'workload') {
-    const m = (document.getElementById('wl_month')||{}).value;
+    // 保存用的月份：取日期从的月份，没有就当前月
+    const _wbv = (document.getElementById('wl_begin')||{value:''}).value;
+    const m = _wbv ? _wbv.slice(0,7) : new Date().toISOString().slice(0,7);
     if (m) params.set('month', m);
   }
   try {
@@ -852,18 +873,26 @@ async function fetchAndRender() {
     kw = (document.getElementById('p2_serial')||{value:''}).value.trim();
     const n2 = (document.getElementById('p2_name')||{value:''}).value.trim();
     const done2 = (document.getElementById('p2_done')||{}).checked;
+    const b2 = (document.getElementById('p2d_begin')||{value:''}).value;
+    const e2 = (document.getElementById('p2d_end')||{value:''}).value;
     if (kw) params.set('keyword', kw);
     if (n2) params.set('kw2', n2);
     if (done2) params.set('show_done', '1');
+    if (b2) params.set('date_begin', b2);
+    if (e2) params.set('date_end', e2);
   } else if (currentTab === 'weekly-plan') {
     const w = (document.getElementById('wp_week')||{value:''}).value;
+    const wkw = (document.getElementById('wp_kw')||{value:''}).value.trim();
+    if (wkw) params.set('keyword', wkw);
     if (w) params.set('week_start', w);
     params.set('mode', weeklyMode || 'plan');
   } else if (currentTab === 'workload') {
     kw = (document.getElementById('wl_person')||{value:''}).value.trim();
-    const w2 = (document.getElementById('wl_month')||{value:''}).value;
+    const wb2 = (document.getElementById('wl_begin')||{value:''}).value;
+    const we2 = (document.getElementById('wl_end')||{value:''}).value;
     if (kw) params.set('keyword', kw);
-    if (w2) params.set('kw2', w2);
+    if (wb2) params.set('date_begin', wb2);
+    if (we2) params.set('date_end', we2);
   } else if (currentTab === 'records') {
     kw = (document.getElementById('rec_kw')||{value:''}).value.trim();
     const m2 = (document.getElementById('rec_month')||{value:''}).value;
@@ -873,9 +902,11 @@ async function fetchAndRender() {
     if (a2) params.set('kw3', a2);
   } else if (currentTab === 'debug-progress') {
     kw = (document.getElementById('debug_kw')||{value:''}).value.trim();
-    const m2 = (document.getElementById('debug_month')||{value:''}).value;
+    const db2 = (document.getElementById('debug_begin')||{value:''}).value;
+    const de3 = (document.getElementById('debug_end')||{value:''}).value;
     if (kw) params.set('keyword', kw);
-    if (m2) params.set('month', m2);
+    if (db2) params.set('date_begin', db2);
+    if (de3) params.set('date_end', de3);
   } else {
     kw = (document.getElementById('user_name')||{value:''}).value.trim();
     const d2 = (document.getElementById('user_dept')||{value:''}).value.trim();
@@ -923,9 +954,13 @@ function doExport() {
     kw = (document.getElementById('p2_serial')||{value:''}).value.trim();
     const n2 = (document.getElementById('p2_name')||{value:''}).value.trim();
     const done2 = (document.getElementById('p2_done')||{}).checked;
+    const b2 = (document.getElementById('p2d_begin')||{value:''}).value;
+    const e2 = (document.getElementById('p2d_end')||{value:''}).value;
     if (kw) params.set('keyword', kw);
     if (n2) params.set('kw2', n2);
     if (done2) params.set('show_done', '1');
+    if (b2) params.set('date_begin', b2);
+    if (e2) params.set('date_end', e2);
   } else {
     kw = (document.getElementById('user_name')||{value:''}).value.trim();
     const d2 = (document.getElementById('user_dept')||{value:''}).value.trim();
@@ -1196,11 +1231,11 @@ async function fetchSync() {
     const d = await (await fetch('/shb/api/sync/status')).json();
     loading.style.display = 'none';
     if (!d.ok) { error.textContent = d.error || '加载失败'; error.style.display = 'block'; return; }
-    renderSyncTable(d.tasks);
+    renderSyncTable(d.tasks, d.schedule);
   } catch(e) { loading.style.display = 'none'; error.textContent = '网络错误：'+e.message; error.style.display = 'block'; }
 }
 
-function renderSyncTable(tasks) {
+function renderSyncTable(tasks, sched) {
   const tc = document.getElementById('table-container');
   const th = ['任务','说明','参数','更新哪块数据','上次','操作'];
   let html = '<table><thead><tr>'+th.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
@@ -1219,6 +1254,22 @@ function renderSyncTable(tasks) {
             '</td><td class="col-text">'+esc(t.writes)+'</td><td class="col-text">'+last+'</td><td>'+btn+'</td></tr>';
   });
   html += '</tbody></table>';
+  // 2026-11-12 hunter 定：表格下方补定时备份说明（时间从 cron 表达式推导，下次时间取 cron 实际值）
+  const _hhmm = (e) => {
+    const p = (e || '').trim().split(/\s+/);
+    return (p.length >= 2) ? (String(p[1]).padStart(2,'0') + ':' + String(p[0]).padStart(2,'0')) : '';
+  };
+  const _wt = _hhmm(sched && sched.weekly && sched.weekly.expr) || '06:00';
+  const _qt = _hhmm(sched && sched.quarterly && sched.quarterly.expr) || '01:00';
+  const _wn = (sched && sched.weekly && sched.weekly.next) || '';
+  const _qn = (sched && sched.quarterly && sched.quarterly.next) || '';
+  html += '<div style="margin-top:14px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;font-size:12.5px;line-height:1.9;color:#d63031">'
+        + '<div style="font-weight:600;color:#d63031;margin-bottom:4px">自动备份：</div>'
+        + '<div>1、每周日 ' + _wt + ' 执行「工单备份」与「实体备份」的增量备份；</div>'
+        + '<div>2、每季度 1 号 ' + _qt + ' 执行「工单备份」与「实体备份」的全量备份，目的是防止增量备份的遗漏。</div>'
+        + '<div>3、自动备份由龙虾完成。</div>'
+        + '<div>下次执行时间：周增量 ' + (esc(_wn) || '—') + '；季度全量 ' + (esc(_qn) || '—') + '。</div>'
+        + '</div>';
   tc.innerHTML = html;
 }
 
