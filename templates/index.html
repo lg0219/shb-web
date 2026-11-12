@@ -18,7 +18,15 @@
   --btn-export:#12855b; --btn-export-ink:#0d6344; --btn-export-soft:rgba(18,133,91,.10);
   --btn-save:#c2761b; --btn-save-ink:#9c5c13; --btn-save-soft:rgba(194,118,27,.10);
   --danger:#c0392b; --danger-soft:rgba(192,57,43,.08);
-  --side:#2b4353; --side-2:#35505f; --side-ink:#d8e2e8; --side-ink-2:#9aacb8;
+  /* 2026-11-12 hunter 要求：侧栏文字原来偏暗、发浑（#d8e2e8 带蓝灰调），提亮到近白
+     --side-ink  #d8e2e8 → #f2f7fa（主文字：菜单项 / 分组标题 / 用户名）
+     --side-ink-2 #9aacb8 → #c2d1db（次级：图标 / 折叠箭头 / 退出登录）
+     底色 #2b4353 不变；对比度 7.4:1 → 9.2:1 */
+  /* 2026-11-12 hunter 要求：侧栏文字原来偏暗、发浑（#d8e2e8 带蓝灰调），分两步提亮
+     第一步 #d8e2e8 → #f2f7fa（hunter：好多了，但还可以再亮一点）
+     第二步 #f2f7fa → #ffffff（主文字到顶）；--side-ink-2 #c2d1db → #d3e0e8
+     悬停/激活仍靠背景 #35505f 区分，不再靠文字变白 */
+  --side:#2b4353; --side-2:#35505f; --side-ink:#ffffff; --side-ink-2:#d3e0e8;
   --r-sm:8px; --r-md:12px; --r-lg:14px;
   --focus:0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 }
@@ -399,8 +407,8 @@ const MAINT_NOTE = '说明：关键字按项目编号、项目名称、工单号
 const ACCEPT_NOTE = '说明：关键字按项目编号、项目名称、工单号模糊匹配，有填关键字时不限时间；日期按工单开始时间筛选，默认当月；验收类别以验收节点为准；整改内容取整改项子表单；结果缓存 30 分钟，刚暂存的内容可能不是即时最新。';
 // 服务人员工作量说明（本地版 + 在线版）
 const WORKLOAD_NOTE = '说明：每天到场/离场都要打卡；工时按「到场→下一次离场」配对、按天累加，跨天不拆分；同一天多次签到取最早/最晚；\n只缺到场：用「到达时间」代替或用 9:00 计算；只缺离场：按当天 17:00 计算；到场离场都缺的，不计工时。有兜底计算的行，工时标红可点击查看原因。';
-// 稽核检查（在线）说明
-const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月；重复工单=同客户同类型工单超过 1 单（工程/预调试/调试/验收/保运），涉及人员取建单人；\n漏打卡=已开始工单按参与人（协同人+实际签到人）检查到场/离场打卡；计划日期未填=计划开始/结束时间缺失，涉及人员取负责人；\n验收整改=验收工单「是否合格」为不合格且整改内容子表单为空，涉及人员取负责人（工单未分配则跳过）。';
+// 稽核检查（在线）说明（2026-11-12 按 hunter 定稿口径重写）
+const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月。\n重复工单：仅查工程/预调试/调试/验收/保运五类，同客户同类型超过 1 单即报，涉及人员取建单人，「时间」列取各单建单日期（多单换行）。\n漏打卡：查全部工单类型，只看已开始的单，按参与人（协同人+实际签到人）检查到场/离场打卡，「时间」列取缺卡日期。\n计划日期未填：除工程工单外全部类型，计划开始/结束时间缺失即报，涉及人员取负责人，不涉及时间。\n验收整改：仅验收工单，「是否合格」为不合格且整改内容子表单为空即报，涉及人员取负责人（未分配则跳过），不涉及时间。';
 const TAB_NOTES = {'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
@@ -499,6 +507,13 @@ function buildResultForm(tab) {
   if (wk && !wk.value) {
     const _td = new Date();
     wk.value = _td.getFullYear() + '-' + String(_td.getMonth() + 1).padStart(2, '0') + '-' + String(_td.getDate()).padStart(2, '0');
+  }
+  // 本地行程单默认日期：当月 1 号 ~ 月末（2026-11-12 hunter 定，原来为空）
+  if (!isOl && tab === 'trip') {
+    const _tnow = new Date();
+    const _tb = document.getElementById('trip_begin'), _te = document.getElementById('trip_end');
+    if (_tb && !_tb.value) _tb.value = _isoDate(new Date(_tnow.getFullYear(), _tnow.getMonth(), 1));
+    if (_te && !_te.value) _te.value = _isoDate(new Date(_tnow.getFullYear(), _tnow.getMonth() + 1, 0));
   }
   // 在线报表默认日期：行程单=当月；工作量/调试进度=当周（周一~周日）；项目进度=近 7 天
   if (isOl) {
@@ -772,7 +787,8 @@ function renderResultData(data) {
   data.rows.forEach(row => { html += '<tr>' + cols.map((c, ci) => {
     const _v = row[c] == null ? '' : row[c];
     if (_rawCells) return '<td title="'+esc(String(_v).replace(/<br\s*\/?>/gi,' / '))+'" class="col-wrap"'+(ci === 0 ? ' style="text-align:center"' : '')+'>'+_v+'</td>';
-    if (!_rawCells && (c === '工单号' || c === '错误描述') && String(_v).indexOf('\n') >= 0) {
+    // 2026-11-12：行程单「工单编号」「工单类型」、稽核检查「时间」多个值换行显示
+    if (!_rawCells && (c === '工单号' || c === '工单编号' || c === '工单类型' || c === '错误描述' || c === '时间') && String(_v).indexOf('\n') >= 0) {
       return '<td title="'+esc(_v)+'" class="col-wrap">'+esc(_v).replace(/\n/g,'<br>')+'</td>';
     }
     if (c === '工单时长' && row.__warn) {

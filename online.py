@@ -61,7 +61,9 @@ ACCEPT_COLUMNS = ["负责人", "项目编号", "项目名称", "工单状态", "
 
 # 稽核检查（2026-11-11 新增）
 AUDIT_TYPES = ("工程工单", "预调试工单", "调试工单", "验收工单", "保运工单")
-AUDIT_COLUMNS = ["错误类型", "错误描述", "涉及人员", "工单类型", "工单号"]
+# 2026-11-12 hunter 定：工单号后新增「时间」列 —— 重复工单=建单时间（多单用、连接）；
+# 漏打卡=缺卡日期（哪天漏的）；计划日期未填 / 验收整改 不涉及 → 留空
+AUDIT_COLUMNS = ["错误类型", "错误描述", "涉及人员", "工单类型", "工单号", "时间"]
 
 STATE_CN = {"created": "待指派", "allocated": "已指派", "accepted": "已接受",
             "processing": "进行中", "finished": "已完成", "refused": "已拒绝",
@@ -348,21 +350,113 @@ def search_tasks(create_begin, create_end, template_id=None, deadline=None, prog
     return rows
 
 
+def search_tasks_by_conditions(conds, template_id=None, deadline=None, progress=None, label="条件筛选"):
+    """按高级搜索条件（systemConditions）分页拉工单列表
+
+    ⚠️ systemConditions 的时间必须 'YYYY-MM-DD HH:mm:ss'，不能用 ISO 的 T 格式。
+    """
+    rows, page = [], 1
+    while True:
+        body = {"page": page, "pageSize": PAGE_SIZE, "systemConditions": conds}
+        if template_id:
+            body["templateId"] = template_id
+        d = cli(["task", "search", "--data", json.dumps(body, ensure_ascii=False), "-o", "raw"])
+        content = d.get("content") or []
+        rows.extend(content)
+        if progress:
+            progress("已拉工单列表（%s）%d 条" % (label, len(rows)))
+        tp = d.get("totalPages") or 0
+        if not content or page >= tp:
+            break
+        page += 1
+        _check(deadline, "拉取工单列表")
+    return rows
+
+
+def search_tasks_by_update(update_begin, update_end, template_id=None, deadline=None, progress=None):
+    """按「更新时间」区间拉工单列表（2026-11-12 hunter 定：行程单改用此口径）
+
+    依据：打卡会更新工单，updateTime 落在区间内的单就包含当月有活动的单（含跨月单，
+    解决「按建单时间取数漏掉 10 月建单、11 月还在打卡」的问题）。
+
+    ⚠️ 但搜索索引的 updateTime 可能滞后（打卡不刷新它，如 TS2026000144：列表 10-31、详情 11-03），
+    所以 q_trip 里还会并上「已接受~完成」状态区间的工单。
+    """
+    def _fmt(s):
+        return (s or "").replace("T", " ")[:19]
+    conds = [{"property": "updateTime", "operator": "between",
+              "betweenValue1": _fmt(update_begin), "betweenValue2": _fmt(update_end)}]
+    return search_tasks_by_conditions(conds, template_id=template_id, deadline=deadline,
+                                     progress=progress, label="按更新日期")
+
+
 def task_detail(task_id):
     """工单详情（完整 initJson：task 主体 + 卡片定义 + 回执/附加组件）"""
     d = cli(["task", "detail", "--id", task_id, "-o", "raw"])
     return d.get("initJson") or {}
 
 
+def task_card_list(task_id):
+    """附加组件实例列表（真实打卡记录）
+
+    2026-11-12：task detail 的 receiptTaskForUpdate.cardInfo 对部分单为空（如 YTS2026000039，
+    明明有打卡但卡片行为空），真实数据要用 task card list 读。返回卡片列表（含 cardId / attribute 行）。
+    """
+    d = cli(["task", "card", "list", "--task-id", task_id, "-o", "raw"])
+    return d if isinstance(d, list) else [d]
+
+
+def _has_card_rows(init):
+    for src in ("receiptTaskForRead", "receiptTaskForUpdate"):
+        rt = init.get(src) or {}
+        for c in (rt.get("cardInfo") or []):
+            if c.get("attribute"):
+                return True
+    return False
+
+
+def _fill_cards_fallback(task_id, init):
+    """回执里读不到卡片行时，用 task card list 兜底补齐到 receiptTaskForUpdate.cardInfo
+
+    只改内存结构，下游 _wl_cards / card_sign_records / _card_rows 无需改动。
+    """
+    try:
+        lst = task_card_list(task_id)
+    except Exception:
+        return
+    rows = []
+    for c in (lst or []):
+        if not isinstance(c, dict) or not c.get("cardId"):
+            continue
+        if not (c.get("attribute") or []):
+            continue
+        rows.append({"cardId": c.get("cardId"),
+                     "cardName": c.get("cardName") or "",
+                     "inputType": c.get("inputType") or "multiple",
+                     "attribute": c.get("attribute") or []})
+    if not rows:
+        return
+    rt = init.get("receiptTaskForUpdate") or {}
+    rt["cardInfo"] = (rt.get("cardInfo") or []) + rows
+    init["receiptTaskForUpdate"] = rt
+
+
 def map_details(tasks, deadline=None, progress=None):
-    """8 路并发拉工单详情 → {task_id: initJson}"""
+    """8 路并发拉工单详情 → {task_id: initJson}
+
+    2026-11-12：详情回执里没有卡片行时，自动用 task card list 兜底（只对空卡片的单多一次请求）
+    """
     out = {}
     total = len(tasks)
     if not total:
         return out
 
     def _one(t):
-        return t.get("id"), task_detail(t.get("id"))
+        tid = t.get("id")
+        init = task_detail(tid)
+        if not _has_card_rows(init):
+            _fill_cards_fallback(tid, init)
+        return tid, init
 
     done = 0
     failed = 0
@@ -491,7 +585,31 @@ def work_of(ty, task, state_cn):
 def q_trip(params, progress, deadline):
     person = (params.get("keyword") or "").strip()
     b, e = rng(params, "month")          # 默认取当月（hunter 2026-11-10 定）
-    tasks = search_tasks(b, e, deadline=deadline, progress=progress)
+    # 2026-11-12 hunter 定：候选工单 = 【更新日期在区间】∪【已接受~完成区间内、时间与区间有交集的单】
+    #   原因：搜索索引的 updateTime 可能滞后（打卡不刷新它），单靠更新日期会漏（如 TS2026000144）
+    def _fmt(s):
+        return (s or "").replace("T", " ")[:19]
+    _b, _e = _fmt(b), _fmt(e)
+    _cand = {}
+
+    def _merge(lst):
+        for x in lst:
+            if x.get("id"):
+                _cand.setdefault(x["id"], x)
+
+    _merge(search_tasks_by_update(b, e, deadline=deadline, progress=progress))
+    for _conds, _label in (
+        ([{"property": "state", "operator": "in", "inValue": ["accepted", "processing", "finished"]},
+          {"property": "startTime", "operator": "le", "value": _e},
+          {"property": "completeTime", "operator": "ge", "value": _b}], "已接受~完成·区间内"),
+        ([{"property": "state", "operator": "in", "inValue": ["accepted", "processing"]},
+          {"property": "startTime", "operator": "le", "value": _e}], "未完成·跨月"),
+    ):
+        try:
+            _merge(search_tasks_by_conditions(_conds, deadline=deadline, progress=progress, label=_label))
+        except Exception:
+            pass                      # 补集查询失败不影响主口径
+    tasks = list(_cand.values())
     # 待指派/已指派/工单池的单不可能有签到记录 → 不取详情（2026-11-10 优化）
     tasks = [t for t in tasks
              if t.get("state") not in ("created", "allocated", "taskPool")]
@@ -508,13 +626,26 @@ def q_trip(params, progress, deadline):
         cards = _card_rows(init)
         users = {k[0] for k in cards}
         for u in users:
-            ins = cards.get((u, "到场签到"), [])
-            outs = cards.get((u, "离场打卡"), [])
-            for i in range(max(len(ins), len(outs))):
-                a = ins[i] if i < len(ins) else {}
-                l = outs[i] if i < len(outs) else {}
-                recs.append({"name": u, "in": a.get("t"), "in_loc": a.get("loc") or "",
-                             "out": l.get("t"), "out_loc": l.get("loc") or "",
+            # 2026-11-12 hunter 定：到场/离场按「自然日」配对
+            #   原为数组下标配对（第1个到场配第1个离场），跨天会错位并丢掉「只有离场」的那天
+            byday = {}
+            for r in (cards.get((u, "到场签到")) or []):
+                if not r.get("t"):
+                    continue
+                d = r["t"].strftime("%Y-%m-%d")
+                cur = byday.setdefault(d, {"in": None, "in_loc": "", "out": None, "out_loc": ""})
+                if cur["in"] is None or r["t"] < cur["in"]:      # 同天多条：到场取最早
+                    cur["in"], cur["in_loc"] = r["t"], r.get("loc") or ""
+            for r in (cards.get((u, "离场打卡")) or []):
+                if not r.get("t"):
+                    continue
+                d = r["t"].strftime("%Y-%m-%d")
+                cur = byday.setdefault(d, {"in": None, "in_loc": "", "out": None, "out_loc": ""})
+                if cur["out"] is None or r["t"] > cur["out"]:    # 同天多条：离场取最晚
+                    cur["out"], cur["out_loc"] = r["t"], r.get("loc") or ""
+            for _d, cur in byday.items():
+                recs.append({"name": u, "in": cur["in"], "in_loc": cur["in_loc"],
+                             "out": cur["out"], "out_loc": cur["out_loc"],
                              "taskNo": t.get("taskNo"), "type": t.get("templateName"), "work": wc})
 
     # 按（人, 天）聚合：到场取最早、离场取最晚，单号/类型「，」、工作内容「；」去重连接
@@ -536,12 +667,18 @@ def q_trip(params, progress, deadline):
                 g[k].append(src)
 
     rows = []
-    for i, ((name, date), g) in enumerate(
-            sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1])), 1):
-        rows.append({"序号": i, "姓名": name, "日期": date,
+    # 结果只保留打卡日期落在所选区间内的行（2026-11-12：候选按更新时间取，可能带入区间外的打卡）
+    _bd, _ed = b[:10], e[:10]
+    for (name, date), g in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        if not (_bd <= date <= _ed):
+            continue
+        rows.append({"姓名": name, "日期": date,
                      "到场地点": g["in_loc"], "离场地点": g["out_loc"],
-                     "工单编号": "，".join(g["taskNo"]), "工单类型": "，".join(g["type"]),
+                     "工单编号": "\n".join(g["taskNo"]), "工单类型": "\n".join(g["type"]),
                      "工作内容": "；".join(g["work"])})
+    for i, r in enumerate(rows, 1):
+        r["序号"] = i
+    rows = [{k: r[k] for k in TRIP_COLUMNS} for r in rows]
     persons = sorted({r["姓名"] for r in rows if r["姓名"]})
     return _resp("ol:trip", rows, TRIP_COLUMNS, persons=persons,
                  extra={"range": [b[:10].replace("-", "/"), e[:10].replace("-", "/")]})
@@ -1351,7 +1488,7 @@ def q_audit_check(params, progress, deadline):
     口径（2026-11-11 hunter 确认）：
       1) 重复工单：同客户编号 + 同工单类型 >1 单即报
          范围 = 工程/预调试/调试/验收/保运；涉及人员取建单人；工单号多个换行
-      2) 漏打卡（原「未签到」，2026-11-11 hunter 改名）：只看已开始（有开始时间）的工单，**按人**判
+      2) 漏打卡（原「未签到」，2026-11-11 hunter 改名；2026-11-12 改为**全部工单类型**）：只看已开始（有开始时间）的工单，**按人**判
          缺到场→「缺到场签到」；缺离场→「缺离场打卡」；都缺→「未打卡」
       3) 筛选：按工单**创建时间**，默认当月；关键字按姓名（涉及人员）
     """
@@ -1359,14 +1496,17 @@ def q_audit_check(params, progress, deadline):
     types = [x.strip() for x in (params.get("types") or "").split(",") if x.strip()]
     b, e = rng(params, "month")
     tasks = search_tasks(b, e, deadline=deadline, progress=progress)
-    tasks = [t for t in tasks if (t.get("templateName") or "") in AUDIT_TYPES]
+    # 2026-11-12 hunter 定：**漏打卡查全部工单类型**；重复工单只查这 5 类；
+    #   计划日期未填 = 除工程工单外全部类型（工程工单有计划日期要求另行处理，不查此项）
+    audit_tasks = [t for t in tasks if (t.get("templateName") or "") in AUDIT_TYPES]
+    # 详情：漏打卡查全部 + 计划日期未填查（除工程外）全部 → 等于全量拉
     details = map_details(tasks, deadline=deadline, progress=progress) if tasks else {}
 
     rows = []
 
-    # ── 1) 重复工单 ──
+    # ── 1) 重复工单（仅 5 类：工程/预调试/调试/验收/保运）──
     groups = {}
-    for t in tasks:
+    for t in audit_tasks:
         init = details.get(t.get("id")) or {}
         task = init.get("task") or {}
         serial = ((task.get("customer") or {}).get("serialNumber") or "").strip()
@@ -1377,7 +1517,7 @@ def q_audit_check(params, progress, deadline):
     for (serial, typ), lst in groups.items():
         if len(lst) < 2:
             continue
-        makers, nos = [], []
+        makers, nos, times = [], [], []
         for t, task in lst:
             no = (t.get("taskNo") or "").strip()
             if no:
@@ -1386,6 +1526,10 @@ def q_audit_check(params, progress, deadline):
                   or (t.get("createUserName") or "") or "").strip()
             if mk and mk not in makers:
                 makers.append(mk)
+            # 「时间」= 各工单建单时间（2026-11-12 hunter 定）
+            ct = ts_any(t.get("createTime") or task.get("createTime"))
+            if ct:
+                times.append(ct.strftime("%Y-%m-%d"))
         rows.append({
             "错误类型": "重复工单",
             "错误描述": "保运工单之前的所有工单，一个项目只能一次工单，%s这个项目有%d个工单。"
@@ -1393,11 +1537,14 @@ def q_audit_check(params, progress, deadline):
             "涉及人员": "、".join(makers),
             "工单类型": typ,
             "工单号": "\n".join(nos),
+            "时间": "\n".join(times),
         })
 
-    # ── 2) 漏打卡（按人；原「未签到」，2026-11-11 hunter 改名）──
+    # ── 2) 漏打卡（全部工单类型，按人；原「未签到」，2026-11-11 hunter 改名）──
     for t in tasks:
-        init = details.get(t.get("id")) or {}
+        init = details.get(t.get("id"))
+        if init is None:
+            continue                      # 详情没拿到（失败/未拉）则不判，避免误报「未打卡」
         task = init.get("task") or {}
         if not ts_any(task.get("startTime")):
             continue                      # 没开始的不查打卡
@@ -1427,17 +1574,32 @@ def q_audit_check(params, progress, deadline):
                 desc = "缺到场签到"
             else:
                 desc = "缺离场打卡"
+            # 「时间」= 缺卡日期（2026-11-12 hunter 定：就是「哪天漏卡了」）
+            #   缺离场 → 用当天到场签到的日期；缺到场 → 用离场打卡的日期；
+            #   到场离场都缺 → 用该工单的实际开始日期
+            if not has_out and rec["in"]:
+                miss_day = min(rec["in"]).strftime("%Y-%m-%d")
+            elif not has_in and rec["out"]:
+                miss_day = min(rec["out"]).strftime("%Y-%m-%d")
+            else:
+                _st = ts_any(task.get("startTime") or t.get("startTime"))
+                miss_day = _st.strftime("%Y-%m-%d") if _st else ""
             rows.append({
                 "错误类型": "漏打卡",
                 "错误描述": desc,
                 "涉及人员": u,
                 "工单类型": t.get("templateName") or "",
                 "工单号": (t.get("taskNo") or ""),
+                "时间": miss_day,
             })
 
-    # ── 3) 计划日期未填 ──
+    # ── 3) 计划日期未填（2026-11-12 hunter 定：除工程工单外全部类型）──
     for t in tasks:
-        init = details.get(t.get("id")) or {}
+        if (t.get("templateName") or "") == "工程工单":
+            continue                      # 工程工单不查计划日期
+        init = details.get(t.get("id"))
+        if init is None:
+            continue                      # 详情没拿到则不判，避免误报
         task = init.get("task") or {}
         ps = (task.get("planStartTime") or "").strip()
         pe = (task.get("planEndTime") or "").strip()
@@ -1458,13 +1620,14 @@ def q_audit_check(params, progress, deadline):
             "涉及人员": boss,
             "工单类型": t.get("templateName") or "",
             "工单号": (t.get("taskNo") or ""),
+            "时间": "",          # 计划日期未填：不涉及时间（hunter 2026-11-12 定）
         })
 
     # ── 4) 验收整改（仅验收工单）──
     # 2026-11-11 hunter 定：是否合格 = 「不合格」且整改内容子表单为空 → 报此错误
     #   口径：① 只查验收工单，其他类型不涉及；② 进行中的也查，但只读正式值（不读暂存）；
     #        ③ 子表单不存在/空数组/各行全空都算空；④ 负责人为空（工单未分配）则跳过。
-    for t in tasks:
+    for t in audit_tasks:
         if (t.get("templateName") or "") != "验收工单":
             continue
         init = details.get(t.get("id")) or {}
@@ -1485,6 +1648,7 @@ def q_audit_check(params, progress, deadline):
             "涉及人员": boss,
             "工单类型": t.get("templateName") or "",
             "工单号": (t.get("taskNo") or ""),
+            "时间": "",          # 验收整改：不涉及时间（hunter 2026-11-12 定）
         })
 
     if types:

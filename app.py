@@ -205,7 +205,7 @@ def query_trip(person, date_begin, date_end, page, page_size):
         total = conn.execute(f"select count(*) c from trip_records{wsql}", args).fetchone()["c"]
         rs = conn.execute(
             f"select person, day, in_loc, out_loc, task_nos, task_types, work from trip_records{wsql} "
-            f"order by day desc, person limit ? offset ?", args + [page_size, (page - 1) * page_size]).fetchall()
+            f"order by day asc, person limit ? offset ?", args + [page_size, (page - 1) * page_size]).fetchall()
         persons = [r["person"] for r in conn.execute(
             "select distinct person from trip_records where coalesce(person,'')<>'' order by person")
             if r["person"]]
@@ -2244,7 +2244,10 @@ def _online_filter(tab, resp, keyword, types=""):
     out = dict(resp)
     out["rows"] = rows
     out["total"] = len(rows)
-    if resp.get("persons"):
+    # 2026-11-12 hunter 定：行程单（ol:trip）的人名标签栏始终显示全员。
+    # 原来这里把 persons 也按 keyword 过滤，导致点某个姓名后其他名字从标签栏消失；
+    # 结果行仍按 keyword 过滤（上面 rows），只是标签栏不收窄。
+    if resp.get("persons") and tab != "ol:trip":
         out["persons"] = [p for p in resp["persons"] if keyword in p]
     return out
 
