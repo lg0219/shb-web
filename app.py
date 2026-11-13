@@ -2509,6 +2509,23 @@ def api_online_task_detail():
     return jsonify({"ok": True, "detail": {"basic": basic, "attrs": attrs[:80]}})
 
 
+@app.route("/api/online/issue-detail")
+def api_online_issue_detail():
+    """问题工单详情（弹窗用）：按 PAAS 表单 bizId 取全量字段，转中文分区展示"""
+    _, tabs = get_user_permissions()
+    if "ol:issue-tasks" not in tabs:
+        return jsonify({"ok": False, "error": "无权限查看问题工单详情"}), 403
+    bid = (request.args.get("id") or "").strip()
+    if not bid:
+        return jsonify({"ok": False, "error": "缺少表单 ID"})
+    try:
+        detail = shb_online.issue_detail(bid)
+    except Exception as e:
+        logger.error("ISSUE_DETAIL_FAIL bizId=%s err=%s", bid, e)
+        return jsonify({"ok": False, "error": "详情查询失败: %s" % e})
+    return jsonify({"ok": True, "detail": detail})
+
+
 @app.route("/api/online-query", methods=["POST"])
 def api_online_query():
     """在线报表查询：命中缓存直接返回结果，否则起后台任务，前端轮询 /api/job"""

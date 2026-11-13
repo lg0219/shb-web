@@ -154,6 +154,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, .item:focus-vis
 .tmodal-body table.kv th{width:28%;text-align:left;color:#5a6b7b;font-weight:500;padding:6px 8px;vertical-align:top;border-bottom:1px solid #f0f2f5}
 .tmodal-body table.kv td{padding:6px 8px;border-bottom:1px solid #f0f2f5;word-break:break-all}
 .tmodal-body .sub{margin:14px 0 6px;font-weight:600;color:#2b4353}
+.tmodal-foot{display:flex;align-items:center;justify-content:center;gap:14px;padding:10px 16px;border-top:1px solid #e6e9ee}
+.tmodal-foot button{border:1px solid #cfd8e3;background:#fff;color:#2b4353;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer}
+.tmodal-foot button:hover:not(:disabled){border-color:#10b0b0;color:#10b0b0}
+.tmodal-foot #detail-nav-info{font-size:13px;color:#5a6b7b;min-width:64px;text-align:center}
+/* 2026-11-13 彩色标签（工单类型/状态/数据状态/当前节点/紧急程度统一用这套） */
+.tag{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;font-weight:600;line-height:19px;white-space:nowrap}
+.tag--green{background:#F0FAF4;color:#1F8A5B;border:1px solid #C9EBD8}
+.tag--blue{background:#EFF6FF;color:#2563A8;border:1px solid #CFE0F7}
+.tag--orange{background:#FFF7EA;color:#A96B12;border:1px solid #F5DFB8}
+.tag--red{background:#FFF0EF;color:#C0433A;border:1px solid #F6D3CF}
+.tag--gray{background:#F0F2F8;color:#4B5A78;border:1px solid #DCE1EC}
+.tag--purple{background:#F6F0FF;color:#6B4FBF;border:1px solid #E1D5F7}
+.tag--teal{background:#ECF7F7;color:#1B7C7C;border:1px solid #C8E7E7}
+.tag--brown{background:#F7EFE8;color:#7D5A44;border:1px solid #E4D2C6}
+.tag--pink{background:#FBF0F6;color:#A8396F;border:1px solid #EED2E1}
 tr.clickable-row{cursor:pointer}
 tr.clickable-row:hover{background:#f2f7f7}
 </style>
@@ -337,7 +352,7 @@ function renderMenu() {
     const _txt = _quiet ? '' : (TAB_NOTES[currentTab] || '');
     _note.textContent = _txt;
     _note.title = _txt;
-    _note.style.color = (currentTab === 'ol:task-query') ? '#d63031' : '';
+    _note.style.color = (currentTab === 'ol:task-query' || currentTab === 'ol:issue-tasks') ? '#d63031' : '';
   }
   const _wp = document.getElementById('wpTabs');
   if (_wp) {
@@ -443,7 +458,8 @@ const WORKLOAD_NOTE = '说明：每天到场/离场都要打卡；工时按「�
 // 稽核检查（在线）说明（2026-11-12 按 hunter 定稿口径重写）
 const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月。\n重复工单：仅查工程/预调试/调试/验收/保运五类，同客户同类型超过 1 单即报，涉及人员取建单人，「时间」列取各单建单日期（多单换行）。\n漏打卡：查全部工单类型，只看已开始的单，按参与人（协同人+实际签到人）检查到场/离场打卡，「时间」列取缺卡日期。\n计划日期未填：除工程工单外全部类型，计划开始/结束时间缺失即报，涉及人员取负责人，不涉及时间。\n验收整改：仅验收工单，「是否合格」为不合格且整改内容子表单为空即报，涉及人员取负责人（未分配则跳过），不涉及时间。';
 const TASK_QUERY_NOTE = '说明：默认只查当天的工单（按更新日期）；状态可多选；关键字匹配工单号、客户编号、客户名称、负责人。';
-const TAB_NOTES = {'ol:task-query': TASK_QUERY_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
+const ISSUE_NOTE = '说明：默认查询本周（周一至今天）创建的工单，按创建时间筛选；状态可多选；关键字匹配编号、客户、问题描述、主责任人员、处理方案；点任意一行查看完整详情。';
+const TAB_NOTES = {'ol:task-query': TASK_QUERY_NOTE, 'ol:issue-tasks': ISSUE_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
   'ol:trip': [
@@ -497,10 +513,19 @@ const ONLINE_FORMS = {
      tip:'按工单「更新时间」筛选。与「更新日期从」配合成区间；留空表示不限。'},
     {id:'oltq_state', label:'状态', type:'multiselect', param:'states',
      tip:'工单当前状态，可多选；全部不选=不限状态。',
-     options:['待指派','已指派','已接受','进行中','已完成','已拒绝','已结算','已关闭','已取消']}
+     options:['待指派','已指派','已接受','进行中','已完成','已拒绝','已结算','已关闭','已取消','工单池']}
   ],
   'ol:issue-tasks': [
-    {id:'olit_kw', label:'关键字', ph:'编号/客户/内容（空=全部）', param:'keyword'}
+    {id:'olit_kw', label:'关键字', ph:'编号/客户/问题描述/主责任人员', param:'keyword',
+     tip:'模糊匹配：编号、客户名称、问题描述、紧急程度、主责任人员、处理方案、处理结果。'},
+    {id:'olit_begin', label:'创建日期从', type:'date', param:'date_begin',
+     tip:'按问题工单的「创建时间」筛选，不是更新日期。默认本周一。'},
+    {id:'olit_end', label:'创建日期至', type:'date', param:'date_end',
+     tip:'按「创建时间」筛选，与「创建日期从」组成区间。默认今天。'},
+    {id:'olit_state', label:'状态', type:'multiselect', param:'states',
+     tip:'按「数据状态」多选；全部不选=不限状态。默认不含「已完成」。',
+     options:['进行中','主责任部门处理','已完成'],
+     default:['进行中','主责任部门处理']}
   ]
 };
 
@@ -519,9 +544,10 @@ function buildResultForm(tab) {
             + '<div class="ms-wrap" id="' + f.id + '">'
             + '<button type="button" class="ms-btn" onclick="_msToggle(\'' + f.id + '\', event)">全部 ▾</button>'
             + '<div class="ms-panel" id="' + f.id + '_panel" onclick="event.stopPropagation()">'
-            + '<label class="ms-item ms-all"><input type="checkbox" class="ms-allbox" checked onchange="_msAll(\'' + f.id + '\', this.checked)">全选</label>'
+            + '<label class="ms-item ms-all"><input type="checkbox" class="ms-allbox"' + ((f.default && f.default.length < opts.length) ? '' : ' checked') + ' onchange="_msAll(\'' + f.id + '\', this.checked)">全选</label>'
             + opts.map(function(o){
-                return '<label class="ms-item"><input type="checkbox" class="ms-opt" value="' + esc(o) + '" checked onchange="_msLabel(\'' + f.id + '\')">' + esc(o) + '</label>';
+                var _ck = (!f.default || f.default.indexOf(o) >= 0) ? ' checked' : '';
+                return '<label class="ms-item"><input type="checkbox" class="ms-opt" value="' + esc(o) + '"' + _ck + ' onchange="_msLabel(\'' + f.id + '\')">' + esc(o) + '</label>';
               }).join('')
             + '</div></div></div>';
       return;
@@ -555,6 +581,7 @@ function buildResultForm(tab) {
     html += '<button class="btn-save" id="btn-save-res" onclick="doSave()">' + _saveTxt + '</button>';
   }
   box.innerHTML = html;
+  cfg.forEach(f => { if (f.type === 'multiselect') _msLabel(f.id); });
   const m = document.getElementById('trip_month');
   if (m && !m.value) m.value = new Date().toISOString().slice(0,7);
   // 工作量默认日期：当周（周一~周日），与在线一致
@@ -612,6 +639,8 @@ function buildResultForm(tab) {
     _set('ola_begin', _isoDate(_m1)); _set('ola_end', _isoDate(_m2));
     _set('olaud_begin', _isoDate(_m1)); _set('olaud_end', _isoDate(_m2));
     _set('olp2_begin', _isoDate(_m1)); _set('olp2_end', _isoDate(_m2));
+    // 问题工单：默认本周（周一→今天，2026-11-13 hunter 定）
+    _set('olit_begin', _isoDate(_mon)); _set('olit_end', _isoDate(_now));
     _set('olw_week', _isoDate(_now));
   }
   updateJobBox();
@@ -643,9 +672,9 @@ function renderPersonBar(persons) {
   if (currentTab === 'ol:task-query') {
     if (!persons || !persons.length) { bar.style.display='none'; bar.innerHTML=''; return; }
     bar.innerHTML = ''; bar.style.display = 'flex'; bar.style.flexWrap = 'wrap'; bar.style.gap = '6px';
-    const _tcol = {'工程工单':'#1a73e8','预调试工单':'#7b61ff','调试工单':'#0e9f6e',
-                   '验收工单':'#c2761b','保运工单':'#16a3a3','售后工单':'#d63031',
-                   '日常工单':'#5a6b7b','改造工单':'#b45309'};
+    const _tcol = {'工程工单':'#2563A8','预调试工单':'#6B4FBF','调试工单':'#1F8A5B',
+                   '验收工单':'#A96B12','保运工单':'#1B7C7C','售后工单':'#C0433A',
+                   '日常工单':'#4B5A78','改造工单':'#7D5A44'};
     const mk2 = (label, val) => {
       const b = document.createElement('button');
       b.className = 'chip' + (_tqType === val ? ' active' : '');
@@ -867,16 +896,59 @@ async function fetchOnline() {
   }
 }
 
+// 详情页翻页（2026-11-13 hunter 定）：按钮 + ↑/↓ 键，Esc 关闭
+let _detailIds = [], _detailIdx = -1;
+function _detailStep(d) {
+  if (_detailIdx < 0) return;
+  const n = _detailIdx + d;
+  if (n < 0 || n >= _detailIds.length) return;
+  openTaskDetail(_detailIds[n]);
+}
+function _updateDetailNav() {
+  const info = document.getElementById('detail-nav-info');
+  const pv = document.getElementById('detail-prev'), nx = document.getElementById('detail-next');
+  if (info) info.textContent = (_detailIdx >= 0 && _detailIds.length) ? (_detailIdx + 1) + ' / ' + _detailIds.length : '';
+  if (pv) { pv.disabled = _detailIdx <= 0; pv.style.opacity = pv.disabled ? .4 : 1; pv.style.cursor = pv.disabled ? 'not-allowed' : 'pointer'; }
+  if (nx) { nx.disabled = _detailIdx >= _detailIds.length - 1; nx.style.opacity = nx.disabled ? .4 : 1; nx.style.cursor = nx.disabled ? 'not-allowed' : 'pointer'; }
+}
+
 async function openTaskDetail(el) {
-  const id = (el && el.getAttribute) ? el.getAttribute('data-id') : el;
+  const id = (el && el.getAttribute) ? String(el.getAttribute('data-id')) : String(el || '');
   const box = document.getElementById('task-modal');
   const body = document.getElementById('task-modal-body');
+  const ttl = document.getElementById('task-modal-title');
   if (!box || !body) return;
+  _detailIdx = _detailIds.indexOf(id);
+  _updateDetailNav();
   box.style.display = 'flex';
   body.innerHTML = '<div class="empty">加载中…</div>';
+  const _isIssue = (currentTab === 'ol:issue-tasks');
+  if (ttl) ttl.textContent = _isIssue ? '问题工单详情' : '工单详情';
   try {
-    const d = await (await fetch('/shb/api/online/task-detail?id=' + encodeURIComponent(id))).json();
+    const _url = _isIssue ? '/shb/api/online/issue-detail?id=' : '/shb/api/online/task-detail?id=';
+    const d = await (await fetch(_url + encodeURIComponent(id))).json();
     if (!d.ok) throw new Error(d.error || '加载失败');
+    if (_isIssue) {
+      // 问题工单：分区展示全量中文信息（2026-11-13 hunter 定）
+      const dt = d.detail || {};
+      if (ttl && dt.title) ttl.textContent = dt.title + ' · 问题工单详情';
+      const secs = dt.sections || [];
+      if (!secs.length) { body.innerHTML = '<div class="empty">无数据</div>'; return; }
+      let h2 = '';
+      secs.forEach(sec => {
+        h2 += '<div class="sub">' + esc(sec.name) + '</div><table class="kv">';
+        (sec.items || []).forEach(it => {
+          let v = esc(it.value == null ? '' : String(it.value)).replace(/\n/g, '<br>');
+          (it.urls || []).forEach(u => {
+            if (u && u.url) v += '<br><a href="' + esc(u.url) + '" target="_blank" rel="noopener">' + esc(u.name || '附件') + '</a>';
+          });
+          h2 += '<tr><th>' + esc(it.label) + '</th><td>' + v + '</td></tr>';
+        });
+        h2 += '</table>';
+      });
+      body.innerHTML = h2;
+      return;
+    }
     const b = (d.detail || {}).basic || {};
     let h = '<table class="kv">';
     Object.keys(b).forEach(k => { h += '<tr><th>' + esc(k) + '</th><td>' + esc(b[k]) + '</td></tr>'; });
@@ -896,6 +968,17 @@ function closeTaskDetail() {
   const box = document.getElementById('task-modal');
   if (box) box.style.display = 'none';
 }
+document.addEventListener('keydown', function(e) {
+  const box = document.getElementById('task-modal');
+  if (!box || box.style.display === 'none') return;
+  if (e.key === 'Escape') { closeTaskDetail(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _detailStep(-1); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); _detailStep(1); }
+});
+
+function _tagCell(v, cls) {
+  return '<td title="' + esc(v) + '" class="col-text"><span class="tag ' + cls + '">' + esc(v) + '</span></td>';
+}
 
 function renderResultData(data) {
   const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
@@ -905,6 +988,7 @@ function renderResultData(data) {
     tc.innerHTML = '<div class="empty">暂无数据</div>'; pg.style.display = 'none'; return;
   }
   const cols = (data.columns && data.columns.length) ? data.columns : Object.keys(data.rows[0]);
+  _detailIds = data.rows.filter(r => r && r.__id).map(r => String(r.__id));
   const _rawCells = !!data.html_cells;
   let html = '<table><thead><tr>' + cols.map((c, ci) => {
     let _th = _rawCells ? c : esc(c);
@@ -920,7 +1004,7 @@ function renderResultData(data) {
     }
     return '<th' + _thTitle + (_rawCells && ci === 0 ? ' style="text-align:center"' : '') + '>' + _th + '</th>';
   }).join('') + '</tr></thead><tbody>';
-  data.rows.forEach(row => { const _rowAttr = (currentTab === 'ol:task-query' && row.__id) ? ' class="clickable-row" onclick="openTaskDetail(this)" data-id="' + esc(String(row.__id)) + '"' : ''; html += '<tr' + _rowAttr + '>' + cols.map((c, ci) => {
+  data.rows.forEach(row => { const _rowAttr = ((currentTab === 'ol:task-query' || currentTab === 'ol:issue-tasks') && row.__id) ? ' class="clickable-row" onclick="openTaskDetail(this)" data-id="' + esc(String(row.__id)) + '"' : ''; html += '<tr' + _rowAttr + '>' + cols.map((c, ci) => {
     const _v = row[c] == null ? '' : row[c];
     if (_rawCells) return '<td title="'+esc(String(_v).replace(/<br\s*\/?>/gi,' / '))+'" class="col-wrap"'+(ci === 0 ? ' style="text-align:center"' : '')+'>'+_v+'</td>';
     // 2026-11-12：行程单「工单编号」「工单类型」、稽核检查「时间」多个值换行显示
@@ -938,6 +1022,16 @@ function renderResultData(data) {
       }
     }
     // 工单查询（2026-11-13）：创建时间/更新日期只显示到日，悬停仍显示完整时间
+    // 问题工单（2026-11-13 hunter 定）：编号只显示后三位，实际值不变，悬停看完整编号
+    if (currentTab === 'ol:issue-tasks' && c === '编号') {
+      const _no = String(_v || '');
+      return '<td title="' + esc(_no) + '" class="col-text">' + esc(_no.slice(-3)) + '</td>';
+    }
+    if (currentTab === 'ol:issue-tasks' && (c === '创建时间' || c === '完成日期')) {
+      const _full2 = String(_v || '');
+      const _d2 = _full2.slice(0, 10);
+      return '<td title="' + esc(_full2) + '" class="col-text">' + esc(_d2) + '</td>';
+    }
     if (currentTab === 'ol:task-query' && (c === '创建时间' || c === '更新日期' || c === '计划开始' || c === '计划结束')) {
       const _full = String(_v || '');
       const _d = _full.slice(0, 10);
@@ -945,19 +1039,43 @@ function renderResultData(data) {
     }
     // 工单查询（2026-11-13）：工单类型配色
     if (currentTab === 'ol:task-query' && c === '工单类型') {
-      const _tm = {'工程工单':'#1a73e8','预调试工单':'#7b61ff','调试工单':'#0e9f6e',
-                   '验收工单':'#c2761b','保运工单':'#16a3a3','售后工单':'#d63031',
-                   '日常工单':'#5a6b7b','改造工单':'#b45309'};
-      const _tc = _tm[String(_v).trim()];
-      if (_tc) return '<td title="'+esc(_v)+'" class="col-text" style="color:'+_tc+';font-weight:600">'+esc(_v)+'</td>';
+      const _tm = {'工程工单':'tag--blue','预调试工单':'tag--purple','调试工单':'tag--green',
+                   '验收工单':'tag--orange','保运工单':'tag--teal','售后工单':'tag--red',
+                   '日常工单':'tag--gray','改造工单':'tag--brown'};
+      const _tv = String(_v || '').trim();
+      const _tc = _tm[_tv];
+      if (_tc) return _tagCell(_tv, _tc);
     }
     // 工单查询（2026-11-13）：不同状态不同颜色
     if (currentTab === 'ol:task-query' && c === '状态') {
-      const _sm = {'已完成':'#12855b','进行中':'#1a73e8','待指派':'#c2761b','已指派':'#c2761b',
-                   '已接受':'#c2761b','已拒绝':'#d63031','已取消':'#8a94a6',
-                   '已结算':'#5a6b7b','已关闭':'#5a6b7b'};
-      const _sc = _sm[String(_v).trim()];
-      if (_sc) return '<td title="'+esc(_v)+'" class="col-text" style="color:'+_sc+';font-weight:600">'+esc(_v)+'</td>';
+      const _sm = {'已完成':'tag--green','进行中':'tag--blue','待指派':'tag--orange','已指派':'tag--orange',
+                   '已接受':'tag--orange','已拒绝':'tag--red','已取消':'tag--gray',
+                   '已结算':'tag--gray','已关闭':'tag--gray','工单池':'tag--pink'};
+      const _sv = String(_v || '').trim();
+      const _sc = _sm[_sv];
+      if (_sc) return _tagCell(_sv, _sc);
+    }
+    // 问题工单（2026-11-13）：紧急程度用标签展示（加急红/较急橙/常规灰蓝）
+    if (currentTab === 'ol:issue-tasks' && c === '紧急程度') {
+      const _uv = String(_v || '').trim();
+      const _um = {'特急':'tag--red','加急':'tag--red','较急':'tag--orange',
+                   '一般':'tag--gray','常规':'tag--gray'};
+      if (_uv) return _tagCell(_uv, _um[_uv] || 'tag--gray');
+    }
+    // 问题工单（2026-11-13）：数据状态配色
+    if (currentTab === 'ol:issue-tasks' && c === '数据状态') {
+      const _fsm = {'已完成':'tag--green','进行中':'tag--blue','主责任部门处理':'tag--orange',
+                    '已撤销':'tag--gray','已取消':'tag--gray'};
+      const _fv = String(_v || '').trim();
+      const _fc = _fsm[_fv];
+      if (_fc) return _tagCell(_fv, _fc);
+    }
+    // 问题工单（2026-11-13）：当前节点配色
+    if (currentTab === 'ol:issue-tasks' && c === '当前节点') {
+      const _cnm = {'接受':'tag--orange','责任部门处理':'tag--blue','主管审核':'tag--purple',
+                    '技术部处理':'tag--blue','完结':'tag--green'};
+      const _cv = String(_v || '').trim();
+      if (_cv) return _tagCell(_cv, _cnm[_cv] || 'tag--gray');
     }
     // 验收进度（2026-11-11 hunter 定）：「是否合格」列值精确等于「不合格」→ 红字加粗（该值固定，不做包含匹配）
     if (currentTab === 'ol:accept-progress' && c === '是否合格' && String(_v).trim() === '不合格') {
@@ -1322,6 +1440,10 @@ async function doExportOnline() {
           rs.forEach((r, i) => aoa.push(cols.map(c => (c === '序号' ? i + 1 : _cellText(r[c])))));
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheetName(nm, used));
         });
+      } else if (currentTab === 'ol:issue-tasks') {
+        // 问题工单：Excel 去掉「客户」列，其余列照旧（2026-11-13 hunter 定）
+        _appendSheet(wb, base.replace('（在线）', ''),
+                     {columns: cols.filter(c => c !== '客户'), rows: data.rows});
       } else {
         _appendSheet(wb, base.replace('（在线）', ''), data);
       }
@@ -1928,8 +2050,13 @@ _eb.innerHTML = (RESULT_FORMS[currentTab] ? '<svg viewBox="0 0 24 24" width="15"
 </script>
 <div id="task-modal" class="tmodal" style="display:none" onclick="if(event.target===this)closeTaskDetail()">
   <div class="tmodal-box">
-    <div class="tmodal-head"><span>工单详情</span><button onclick="closeTaskDetail()" title="关闭">×</button></div>
+    <div class="tmodal-head"><span id="task-modal-title">工单详情</span><button onclick="closeTaskDetail()" title="关闭">×</button></div>
     <div id="task-modal-body" class="tmodal-body"></div>
+    <div class="tmodal-foot">
+      <button id="detail-prev" onclick="_detailStep(-1)">‹ 上一条</button>
+      <span id="detail-nav-info"></span>
+      <button id="detail-next" onclick="_detailStep(1)">下一条 ›</button>
+    </div>
   </div>
 </div>
 </body>

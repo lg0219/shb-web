@@ -1573,6 +1573,68 @@ def _fmt_dt(v, fmt="%Y-%m-%d %H:%M:%S"):
     return d.strftime(fmt) if d else ""
 
 
+_CUST_ALL_CACHE = {"ts": 0.0, "map": {}}
+
+
+def _customer_serial_map_all():
+    """全量客户：名称 → 客户编号（1 小时缓存）
+
+    部分工单模板（如日常工单）的 attribute 里没有客户编号，customerEntity 也不带 serialNumber，
+    只能靠客户名称回查客户档案（2026-11-13 修：非工程工单客户编号显示不出来）。
+    """
+    now = time.time()
+    if _CUST_ALL_CACHE["map"] and now - _CUST_ALL_CACHE["ts"] < 3600:
+        return _CUST_ALL_CACHE["map"]
+    m, page = {}, 1
+    while page <= 15:
+        try:
+            d = cli(["customer", "list", "--page", str(page), "--page-size", "200", "-o", "raw"],
+                    timeout=60)
+        except Exception:
+            break
+        rows = d.get("list") or []
+        for r in rows:
+            nm = (r.get("name") or "").strip()
+            sn = (r.get("serialNumber") or "").strip()
+            if nm and sn:
+                m[nm] = sn
+        if not rows or not d.get("hasNextPage"):
+            break
+        page += 1
+    if m:
+        _CUST_ALL_CACHE.update(ts=now, map=m)
+    return m
+
+
+_TASK_CUSTFIELD_CACHE = {}
+
+
+def _task_cust_field(tid):
+    """工单类型 → 「客户编号」字段 ID（按字段显示名探测，缓存 1 小时）
+
+    2026-11-13：工程/预调试/调试/日常有客户编号字段，验收/保运/售后/改造没有。
+    优先读字段值；字段不存在或值为空时再走 BY 值扫描 / 客户名回查。
+    """
+    if not tid:
+        return ""
+    hit = _TASK_CUSTFIELD_CACHE.get(tid)
+    if hit is not None:
+        return hit
+    fld = ""
+    try:
+        d = cli(["task", "field", "list", "--type-id", tid, "-o", "raw"], timeout=30)
+        rows = d if isinstance(d, list) else (d.get("content") or d.get("rows") or [])
+        for f in rows:
+            nm = str(f.get("displayName") or "")
+            if "客户编号" in nm or "客户编码" in nm:
+                fld = f.get("fieldName") or ""
+                break
+    except Exception:
+        fld = ""
+    _TASK_CUSTFIELD_CACHE[tid] = fld
+    return fld
+
+
 def q_task_query(params, progress, deadline):
     """工单查询（在线）：按类型查工单主表
 
@@ -1612,6 +1674,9 @@ def q_task_query(params, progress, deadline):
     states = params.get("states") or []
     if isinstance(states, str):
         states = [x.strip() for x in states.split(",") if x.strip()]
+    # 2026-11-13 修：勾满所有状态 = 不限状态。否则「全选」会把未列出的新状态（如工单池）挡在外面
+    if states and set(states) >= set(STATE_CN.values()):
+        states = []
     state_codes = [STATE_REV[x] for x in states if x in STATE_REV] if states else []
 
     rows, MAX_PAGES = [], 10
@@ -1625,6 +1690,8 @@ def q_task_query(params, progress, deadline):
                 body["stateList"] = state_codes
             d = cli(["task", "search", "--data", json.dumps(body, ensure_ascii=False), "-o", "raw"])
             batch = d.get("content") or []
+            for _t in batch:
+                _t["__tid"] = tid
             rows.extend(batch)
             if progress:
                 progress("已拉工单 %d 条" % len(rows))
@@ -1643,7 +1710,20 @@ def q_task_query(params, progress, deadline):
         cust = (t.get("customerEntity") or {})
         cname = cust.get("name") or (t.get("customer") or {}).get("name") or ""
         attr = t.get("attribute") or {}
-        serial = cust.get("serialNumber") or attr.get("field_bQ4PDxGD1TqvSbFU") or ""
+        # 客户编号：不同工单模板存放的字段 ID 不同（工程 field_bQ4PDx…、调试 field_MYEWB…、
+        # 预调试 field_ZkNhM… 等），customerEntity 里又没有 serialNumber。
+        # 2026-11-13 修：先按已知字段取，取不到再扫 attribute 里符合 BY+数字 的值。
+        _cf = _task_cust_field(t.get("templateId") or t.get("__tid"))
+        serial = cust.get("serialNumber") or (attr.get(_cf) if _cf else "") or \
+                 attr.get("field_bQ4PDxGD1TqvSbFU") or ""
+        if isinstance(serial, dict):
+            serial = serial.get("name") or serial.get("serialNumber") or ""
+        serial = str(serial or "").strip()
+        if not serial:
+            for _k, _v in attr.items():
+                if isinstance(_v, str) and re.match(r"^BY\d{4,}(-\d+)?$", _v.strip()):
+                    serial = _v.strip()
+                    break
         # 列表行里负责人常在 executorUser.displayName（executorName 为空），2026-11-13 修
         ex = (t.get("executorName")
               or (t.get("executorUser") or {}).get("displayName")
@@ -1666,6 +1746,16 @@ def q_task_query(params, progress, deadline):
             "计划结束": _fmt_dt(t.get("planEndTime")),
             "__id": t.get("id") or "",
         })
+    # 客户编号兜底：attribute 里没有的（日常工单等）按客户名称回查客户档案
+    if any(not x.get("客户编号") for x in out):
+        try:
+            _cmap = _customer_serial_map_all()
+            for x in out:
+                if not x.get("客户编号") and x.get("客户"):
+                    x["客户编号"] = _cmap.get(str(x["客户"]).strip(), "") or ""
+        except Exception:
+            pass
+
     # 排序：先按时间倒序，再按类型顺序稳定排序 → 工程工单排最前，其他按预调试/调试/…顺序
     out.sort(key=lambda x: (x.get("创建时间") or "", x.get("工单编号") or ""), reverse=True)
     _order = {nm: i for i, nm in enumerate(TASK_TYPES.keys())}
@@ -1673,20 +1763,193 @@ def q_task_query(params, progress, deadline):
     return _resp("ol:task-query", out, TASK_QUERY_COLUMNS, persons=list(TASK_TYPES.keys()))
 
 
+# ── 问题工单（PAAS 表单）：列表口径 + 详情（2026-11-13 hunter 定）───────────
+# 列表只保留这 11 列；内容ID / 表单名称 / 无中文名的遗留字段一律不展示
+ISSUE_LIST_COLUMNS = ["编号", "项目编码", "数据状态", "当前节点", "创建时间", "问题描述", "紧急程度",
+                      "主责任人员", "处理方案", "完成日期", "处理结果", "客户"]
+# 客户字段（含关联客户的编号 relationDate.serialNumber）
+ISSUE_CUSTOMER_FIELD = "fieldYHr9khcoPm8KM4rL6Mcxi7xWAqUJY3CV"
+# 模板里已删除/弃用的遗留字段：老数据仍有值，接口不返回中文名，这里补上
+ISSUE_LEGACY_LABELS = {
+    "fieldzWP3auuCq1DGz4jcru9vQl2MRZfLKjHG": "处理结果",
+    # 系统字段（模板字段接口不返回，详情页要显示中文）
+    "serialNumber": "编号",
+    "flowStatus": "数据状态",
+    "currentNode": "当前节点",
+    "createTime": "创建时间",
+    "createUser": "创建人",
+}
+# 详情页分区（按表单顺序）
+ISSUE_DETAIL_SECTIONS = [
+    ("基本信息", ["serialNumber", "flowStatus", "currentNode", "createTime", "createUser"]),
+    ("问题情况", ["fieldCkGHayYCFkZpxyIpcZi0EDejC3i6BzrO", "fielduMxDanXfhdNxbSdSDmXammD1eqr1h6d6",
+                  "field7ROtDQTjE2qnPIY3YrCdIH71k5KnR1by", "fieldYHr9khcoPm8KM4rL6Mcxi7xWAqUJY3CV",
+                  "field0BIWi5f4ckld4Lv3CqkoZOczGXyWIGpc", "fieldsTrkLHlaGRKdNT0oQpRvybFEnUjqc31n",
+                  "fieldrpOOWx4w3NLUvD5HUU0kp4x6qF7UBMRO", "fieldg9qP0sgokhHWZfD8o46T9gOgUKaXTCKT"]),
+    ("责任分配", ["fieldKzbzxQYBONa5lP1xsONPyPVOU6PituNi", "field1q38DI7gJ2FpKJQH1EvfCnL1Xp1sH0sg",
+                  "fielda74LteL9SssW7qxrbl1KLZintPQUQwws", "field6YsDIgv1XOj8rXWTxAjUZsvxo8G9kGs4",
+                  "fieldA1Ap4QWvX5S8hMjR8ZtXZstjcJZE70sq"]),
+    ("处理与完成", ["fieldmApTY9ARF2juOYN8IfVFOjX4s4WTotB1", "fieldC5mFYVuPIYD1uSjw6wDUiSoAjhSzCCDN",
+                    "fieldqa8AAh1Oyast1mfcXXcgjSjew8dnexfX", "fieldKR8SlIbZYkP0U0FZSVHjwwKFcrMv5iVR",
+                    "field2fgZeaOf96zKeBHggr4MfWxejvebtF5U", "fieldL97jUmNOU7deyzlvkj9b2FT1iJDg7Dij",
+                    "field73exUHuTAu0xVTeyxlvMqXnkNuUvdueC", "fieldzWP3auuCq1DGz4jcru9vQl2MRZfLKjHG"]),
+]
+ISSUE_FIELD_CACHE = {"ts": 0.0, "labels": {}, "types": {}}
+
+
+def _issue_labels(force=False):
+    """模板字段 → 中文名 / 表单类型（含子表单），缓存 10 分钟"""
+    now = time.time()
+    if not force and ISSUE_FIELD_CACHE["labels"] and now - ISSUE_FIELD_CACHE["ts"] < 600:
+        return ISSUE_FIELD_CACHE["labels"], ISSUE_FIELD_CACHE["types"]
+    labels, types = {}, {}
+
+    def walk(fs):
+        for f in fs or []:
+            fn = f.get("fieldName")
+            if not fn:
+                continue
+            labels[fn] = f.get("displayName") or fn
+            types[fn] = f.get("formType") or ""
+            walk(f.get("subFormFieldList"))
+
+    try:
+        d = cli(["paas", "template-fields", "--template-biz-id", ISSUE_TEMPLATE_BIZ_ID, "-o", "raw"])
+        walk(d.get("paasFormFieldVOList"))
+    except Exception:
+        pass
+    labels.update(ISSUE_LEGACY_LABELS)
+    ISSUE_FIELD_CACHE.update(ts=now, labels=labels, types=types)
+    return labels, types
+
+
+def _issue_cell(v):
+    """列表单元格：标量/数组/对象 → 可读文本"""
+    if v in (None, "", [], {}):
+        return ""
+    if isinstance(v, dict):
+        return str(v.get("displayName") or v.get("name") or v.get("label") or "")
+    if isinstance(v, list):
+        parts = []
+        for x in v:
+            if isinstance(x, dict):
+                t = x.get("displayName") or x.get("name") or x.get("label") or ""
+            else:
+                t = str(x)
+            if t:
+                parts.append(t)
+        return "；".join(parts)
+    return str(v)
+
+
+_ISSUE_CUST_CACHE = {"ts": 0.0, "map": {}}
+_ISSUE_NAME_CACHE = {"ts": 0.0, "map": {}}
+
+
+def _customer_serial_by_name(name):
+    """客户名称 → 客户编号（云端客户列表），结果缓存 10 分钟
+
+    老工单的客户关联被重建过，relationDate.serialNumber 是空的，
+    只能按客户名称回查（2026-11-13 hunter 要求项目编码必须显示客户编号）。
+    """
+    name = (name or "").strip()
+    if not name:
+        return ""
+    now = time.time()
+    cache = _ISSUE_NAME_CACHE
+    if now - cache["ts"] > 600:
+        cache["map"] = {}
+        cache["ts"] = now
+    m = cache["map"]
+    if name in m:
+        return m[name]
+    sn = ""
+    try:
+        d = cli(["customer", "list", "--keyword", name, "--page-size", "5", "-o", "raw"])
+        rows = d.get("list") or d.get("content") or []
+        for r in rows:
+            if (r.get("name") or "").strip() == name:
+                sn = r.get("serialNumber") or ""
+                break
+        if not sn and rows:
+            sn = rows[0].get("serialNumber") or ""
+    except Exception:
+        sn = ""
+    m[name] = sn
+    return sn
+
+
+def _issue_customer_map(rows):
+    """bizId → 客户编号：先批量取表单关联编号，空值再按客户名称回查"""
+    now = time.time()
+    cache = _ISSUE_CUST_CACHE
+    if now - cache["ts"] > 120:
+        cache["map"] = {}
+        cache["ts"] = now
+    m = cache["map"]
+    todo = [r for r in rows if r.get("bizId") and r.get("bizId") not in m]
+    ids = [r.get("bizId") for r in todo]
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        try:
+            d = cli(["paas", "form", "batch-get",
+                     "--data", json.dumps({"bizIds": chunk}, ensure_ascii=False),
+                     "-o", "raw"], timeout=60)
+        except Exception:
+            break
+        for bid, rec in (d or {}).items():
+            sn = ""
+            for it in (rec.get("paasFormValueList") or []):
+                if it.get("fieldName") == ISSUE_CUSTOMER_FIELD:
+                    v = _issue_json(it.get("value"))
+                    if isinstance(v, list) and v and isinstance(v[0], dict):
+                        sn = ((v[0].get("relationDate") or {}).get("serialNumber")) or ""
+                    break
+            m[bid] = sn
+
+    # 表单里没有编号的老工单 → 按客户名称回查（并发，结果有 10 分钟缓存）
+    lack = [r for r in todo if not m.get(r.get("bizId"))]
+    if lack:
+        names = list({(r.get(ISSUE_CUSTOMER_FIELD) or "").strip() for r in lack} - {""})
+        got = {}
+        if names:
+            with ThreadPoolExecutor(max_workers=min(WORKERS, len(names))) as ex:
+                futs = {ex.submit(_customer_serial_by_name, n): n for n in names}
+                for fu in as_completed(futs):
+                    got[futs[fu]] = fu.result() or ""
+        for r in lack:
+            nm = (r.get(ISSUE_CUSTOMER_FIELD) or "").strip()
+            if got.get(nm):
+                m[r.get("bizId")] = got[nm]
+    return m
+
+
 def q_issue_tasks(params, progress, deadline):
-    """问题工单（在线）：PAAS 表单，列名与本地 bkent:paas 一致（由接口返回的 columns 决定）"""
+    """问题工单（在线）：PAAS 表单
+
+    2026-11-13 hunter 定：
+      · 列表 12 列（去掉内容ID/表单名称/是否完成流程/无中文名遗留字段），新增项目编码与客户列，创建时间只显示日期（悬停看全量）
+      · 按创建时间筛选，无参数时默认本周（周一→今天）
+      · 状态多选按「数据状态」过滤
+    """
     keyword = (params.get("keyword") or "").strip()
-    rows, page, cols = [], 1, []
-    MAX_PAGES = 10
+    b = (params.get("date_begin") or "").strip()
+    e = (params.get("date_end") or "").strip()
+    if not b and not e:
+        now = datetime.now()
+        b = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+        e = now.strftime("%Y-%m-%d")
+    states = params.get("states") or []
+    if isinstance(states, str):
+        states = [x.strip() for x in states.split(",") if x.strip()]
+    # 2026-11-13 hunter 定：问题工单默认不显示「已完成」，需要时在状态里勾上
+    exclude_finished = not states
+
+    rows, page, MAX_PAGES = [], 1, 10
     while page <= MAX_PAGES:
-        argv = ["paas", "form", "search",
-                "--template-biz-id", ISSUE_TEMPLATE_BIZ_ID,
-                "--page-num", str(page), "--page-size", str(PAGE_SIZE), "-o", "raw"]
-        if keyword:
-            argv += ["--keyword", keyword]
-        d = cli(argv)
-        if not cols:
-            cols = d.get("columns") or []
+        d = cli(["paas", "form", "search",
+                 "--template-biz-id", ISSUE_TEMPLATE_BIZ_ID,
+                 "--page-num", str(page), "--page-size", str(PAGE_SIZE), "-o", "raw"])
         batch = d.get("rows") or []
         rows.extend(batch)
         if progress:
@@ -1697,21 +1960,192 @@ def q_issue_tasks(params, progress, deadline):
         page += 1
         _check(deadline, "问题工单")
 
-    fields = [c.get("field") for c in cols]
-    labels = [c.get("label") or c.get("field") for c in cols]
+    cust_map = _issue_customer_map(rows)
     out = []
     for r in rows:
-        item = {}
-        for f, lab in zip(fields, labels):
-            v = r.get(f)
-            if isinstance(v, list):
-                v = "；".join(str(x) for x in v if x not in (None, ""))
-            elif isinstance(v, dict):
-                v = v.get("label") or v.get("name") or v.get("displayName") or str(v)
-            item[lab] = "" if v is None else str(v)
-        item["__id"] = r.get("bizId") or ""
+        ct = str(r.get("createTime") or "")
+        day = ct[:10]
+        if b and day and day < b:
+            continue
+        if e and day and day > e:
+            continue
+        st = str(r.get("flowStatus") or "")
+        if states and st not in states:
+            continue
+        if exclude_finished and st == "已完成":
+            continue
+        item = {
+            "编号": str(r.get("serialNumber") or ""),
+            "项目编码": cust_map.get(r.get("bizId"), "") or "",
+            "数据状态": st,
+            "当前节点": str(r.get("currentNode") or ""),
+            "创建时间": ct,
+            "问题描述": _issue_cell(r.get("field0BIWi5f4ckld4Lv3CqkoZOczGXyWIGpc")),
+            "紧急程度": _issue_cell(r.get("fieldrpOOWx4w3NLUvD5HUU0kp4x6qF7UBMRO")),
+            "主责任人员": _issue_cell(r.get("field1q38DI7gJ2FpKJQH1EvfCnL1Xp1sH0sg")),
+            "处理方案": _issue_cell(r.get("fieldC5mFYVuPIYD1uSjw6wDUiSoAjhSzCCDN")),
+            "完成日期": _issue_cell(r.get("field2fgZeaOf96zKeBHggr4MfWxejvebtF5U")),
+            "是否完成流程": _issue_cell(r.get("field73exUHuTAu0xVTeyxlvMqXnkNuUvdueC")),
+            "处理结果": _issue_cell(r.get("fieldzWP3auuCq1DGz4jcru9vQl2MRZfLKjHG")),
+            "客户": _issue_cell(r.get(ISSUE_CUSTOMER_FIELD)),
+            "__id": r.get("bizId") or "",
+        }
+        if keyword:
+            hay = " ".join(str(item.get(c) or "") for c in ISSUE_LIST_COLUMNS)
+            if keyword not in hay:
+                continue
         out.append(item)
-    return _resp("ol:issue-tasks", out, labels)
+    out.sort(key=lambda x: x.get("创建时间") or "", reverse=True)
+    return _resp("ol:issue-tasks", out, ISSUE_LIST_COLUMNS)
+
+
+_ISSUE_ROWS_CACHE = {"ts": 0.0, "rows": {}}
+
+
+def _issue_rows_by_id():
+    """问题工单全量行（详情页取状态/节点用），缓存 2 分钟"""
+    now = time.time()
+    if _ISSUE_ROWS_CACHE["rows"] and now - _ISSUE_ROWS_CACHE["ts"] < 120:
+        return _ISSUE_ROWS_CACHE["rows"]
+    rows, page = [], 1
+    while page <= 10:
+        d = cli(["paas", "form", "search", "--template-biz-id", ISSUE_TEMPLATE_BIZ_ID,
+                 "--page-num", str(page), "--page-size", str(PAGE_SIZE), "-o", "raw"])
+        batch = d.get("rows") or []
+        rows.extend(batch)
+        tp = (d.get("page") or {}).get("totalPages") or 0
+        if not batch or page >= tp:
+            break
+        page += 1
+    m = {r.get("bizId"): r for r in rows if r.get("bizId")}
+    _ISSUE_ROWS_CACHE.update(ts=now, rows=m)
+    return m
+
+
+def _issue_json(v):
+    if isinstance(v, str):
+        s = v.strip()
+        if s[:1] in ("[", "{", '"'):
+            try:
+                return json.loads(s)
+            except Exception:
+                return v
+    return v
+
+
+def _issue_value(raw, ftype):
+    """字段原值 → (显示文本, 附件链接列表)"""
+    v = _issue_json(raw)
+    if v in (None, "", [], {}):
+        return "", []
+    urls = []
+    if ftype == "user":
+        items = v if isinstance(v, list) else [v]
+        names = [_issue_cell(x) for x in items]
+        return "、".join([n for n in names if n]), urls
+    if ftype == "customer":
+        parts = []
+        for x in (v if isinstance(v, list) else [v]):
+            if not isinstance(x, dict):
+                parts.append(str(x))
+                continue
+            nm = x.get("name") or x.get("displayName") or ""
+            sn = ((x.get("relationDate") or {}).get("serialNumber")) or ""
+            parts.append(("%s（%s）" % (nm, sn)) if sn else nm)
+        return "；".join([p for p in parts if p]), urls
+    if ftype == "attachment":
+        for x in (v if isinstance(v, list) else [v]):
+            if not isinstance(x, dict):
+                continue
+            nm = x.get("filename") or x.get("originFileName") or "附件"
+            u = x.get("url") or ""
+            if u:
+                urls.append({"name": nm, "url": u})
+            else:
+                urls.append({"name": nm, "url": ""})
+        return "、".join(u["name"] for u in urls), urls
+    if isinstance(v, list):
+        vals = []
+        for x in v:
+            if isinstance(x, dict):
+                vals.append(x.get("label") or x.get("name") or x.get("displayName") or "")
+            else:
+                vals.append(str(x))
+        return "；".join([x for x in vals if x]), urls
+    if isinstance(v, dict):
+        return str(v.get("label") or v.get("name") or v.get("displayName") or ""), urls
+    return str(v), urls
+
+
+def issue_detail(biz_id):
+    """问题工单详情：paas form get → 按中文名分区的完整信息"""
+    labels, types = _issue_labels()
+    row = _issue_rows_by_id().get(biz_id) or {}
+    d = cli(["paas", "form", "get", "--content-biz-id", biz_id, "-o", "raw"])
+
+    raw_vals = {}
+    for it in d.get("paasFormValueList") or []:
+        fn = it.get("fieldName")
+        if fn:
+            raw_vals[fn] = it
+
+    # 系统字段取列表行（get 接口只有 flowStatus 数字，没有当前节点）
+    sys_vals = {
+        "serialNumber": row.get("serialNumber") or "",
+        "flowStatus": row.get("flowStatus") or "",
+        "currentNode": row.get("currentNode") or "",
+        "createTime": row.get("createTime") or "",
+        "createUser": row.get("createUser") or "",
+    }
+
+    def build(field, it):
+        ftype = types.get(field) or (it or {}).get("formType") or ""
+        if field in sys_vals:
+            return str(sys_vals[field]), []
+        if not it:
+            return "", []
+        if ftype == "subForm" or it.get("isSubForm") == 1:
+            rows_out = []
+            for sub in it.get("subFormContentVOList") or []:
+                parts = []
+                for vo in (sub or {}).get("subFormValueVOList") or []:
+                    k = vo.get("fieldName")
+                    txt, _ = _issue_value(vo.get("value"), types.get(k) or "")
+                    if txt:
+                        parts.append("%s：%s" % (labels.get(k, k), txt))
+                if parts:
+                    rows_out.append("；".join(parts))
+            return "\n".join(rows_out), []
+        return _issue_value(it.get("value"), ftype)
+
+    sections, used = [], set()
+    for name, fields in ISSUE_DETAIL_SECTIONS:
+        items = []
+        for f in fields:
+            it = raw_vals.get(f)
+            txt, urls = build(f, it)
+            used.add(f)
+            if txt:
+                items.append({"label": labels.get(f, f), "value": txt, "urls": urls})
+        if items:
+            sections.append({"name": name, "items": items})
+
+    # 其余未列出但有值的字段 → 「其他字段」
+    others = []
+    for f, it in raw_vals.items():
+        if f in used:
+            continue
+        # 内部系统键（CREATE_USER / WFLOW_STATUS 等全大写）不展示（2026-11-13 hunter 定）
+        if re.match(r"^[A-Z][A-Z0-9_]+$", f):
+            continue
+        txt, urls = build(f, it)
+        if txt:
+            others.append({"label": labels.get(f, f), "value": txt, "urls": urls})
+    if others:
+        sections.append({"name": "其他字段", "items": others})
+
+    return {"title": row.get("serialNumber") or labels.get("serialNumber") or "问题工单详情",
+            "sections": sections}
 
 
 HANDLERS = {
