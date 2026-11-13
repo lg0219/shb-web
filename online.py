@@ -63,6 +63,24 @@ ACCEPT_TASK_TID = "8024da3e-6881-48d5-ac58-9d0d4ee1da0a"
 ACCEPT_COLUMNS = ["负责人", "项目编号", "项目名称", "工单状态", "开始时间", "完成时间",
                   "验收类别", "是否合格", "整改内容"]
 
+# 在线工单查询（2026-11-13 hunter 定：先做工程工单）
+ENGINEER_TASK_TID = "d5f0af73-6c27-4c8a-8c01-fca8d2ca0a16"
+TASK_QUERY_COLUMNS = ["工单编号", "工单类型", "客户编号", "客户", "状态", "负责人",
+                      "创建时间", "更新日期", "计划开始", "计划结束"]
+# 问题工单（PAAS 表单，与本地 bkent:paas 同一个模板 biz id）
+ISSUE_TEMPLATE_BIZ_ID = "d8c34f70-4f20-4c31-a1da-825d63582cd5"
+# 8 个工单类型（2026-11-13：先放在线查询里，类型条可点选）
+TASK_TYPES = {
+    "工程工单": "d5f0af73-6c27-4c8a-8c01-fca8d2ca0a16",
+    "预调试工单": "aa7f2af4-8b83-4bd4-ac48-b92fce5cca6e",
+    "调试工单": "f6690742-8462-42c9-b7dd-fe36ea405eb6",
+    "验收工单": "8024da3e-6881-48d5-ac58-9d0d4ee1da0a",
+    "保运工单": "1d0a8205-e753-43b2-b811-9c970c12dab5",
+    "售后工单": "4993cd38-3bff-4c79-8178-1089ee3ce95e",
+    "日常工单": "c33632ed-7bcb-4285-a17e-bc6ea8470e9b",
+    "改造工单": "25daa54e-9cc7-4be1-a22f-b235af3fc40d",
+}
+
 # 稽核检查（2026-11-11 新增）
 AUDIT_TYPES = ("工程工单", "预调试工单", "调试工单", "验收工单", "保运工单")
 # 2026-11-12 hunter 定：工单号后新增「时间」列 —— 重复工单=建单时间（多单用、连接）；
@@ -73,6 +91,8 @@ STATE_CN = {"created": "待指派", "allocated": "已指派", "accepted": "已�
             "processing": "进行中", "finished": "已完成", "refused": "已拒绝",
             "costed": "已结算", "closed": "已关闭", "offed": "已取消",
             "taskPool": "工单池"}
+# 状态中文名 → 代码（状态多选筛选用）
+STATE_REV = {v: k for k, v in STATE_CN.items()}
 
 # 行程单「工作内容」取值字段（与 skills/shb-trip-export/scripts/export_trip.py 一致）
 GEN_FIELD = {
@@ -133,6 +153,8 @@ TAB_TITLES = {
     "ol:maintain-progress": "保运进度（在线）",
     "ol:accept-progress": "验收进度（在线）",
     "ol:audit-check": "稽核检查（在线）",
+    "ol:task-query": "工单查询",
+    "ol:issue-tasks": "问题工单",
 }
 
 
@@ -1546,6 +1568,152 @@ def _resp(tab, rows, columns, persons=None, extra=None):
     return data
 
 
+def _fmt_dt(v, fmt="%Y-%m-%d %H:%M:%S"):
+    d = ts_any(v)
+    return d.strftime(fmt) if d else ""
+
+
+def q_task_query(params, progress, deadline):
+    """工单查询（在线）：按类型查工单主表
+
+    2026-11-13 hunter 定：
+      · 默认只查当天（创建日期），无日期参数时后端也按当天兜底
+      · 日期口径可选：create=创建日期 / plan=计划开始日期
+      · 状态可多选（stateList）
+      · 关键字匹配：工单号 / 客户编号 / 客户名称 / 负责人 / 描述（接口 keyword 不认负责人，故本地过滤）
+      · 单类型最多拉 10 页，避免大结果集卡页面
+    """
+    keyword = (params.get("keyword") or "").strip()
+    b = (params.get("date_begin") or "").strip()
+    e = (params.get("date_end") or "").strip()
+    if not b and not e:
+        b = e = datetime.now().strftime("%Y-%m-%d")
+    # 2026-11-13 hunter 定：不再分创建/计划口径，统一按「工单更新日期」
+    # 注意：systemConditions 的时间必须是 "YYYY-MM-DD HH:mm:ss"，不能用 ISO 的 T 格式
+    conds = []
+    if b or e:
+        conds.append({"property": "updateTime", "operator": "between",
+                      "betweenValue1": (b or "1970-01-01") + " 00:00:00",
+                      "betweenValue2": (e or "2099-12-31") + " 23:59:59"})
+
+    raw_types = (params.get("types") or "").strip()
+    tids = []
+    if raw_types == "__all__":          # 2026-11-13 hunter 定：全部 = 8 类都查
+        tids = list(TASK_TYPES.values())
+    elif raw_types:
+        for nm in raw_types.split(","):
+            nm = nm.strip()
+            tid = TASK_TYPES.get(nm)
+            if tid and tid not in tids:
+                tids.append(tid)
+    if not tids:
+        tids = [ENGINEER_TASK_TID]
+
+    states = params.get("states") or []
+    if isinstance(states, str):
+        states = [x.strip() for x in states.split(",") if x.strip()]
+    state_codes = [STATE_REV[x] for x in states if x in STATE_REV] if states else []
+
+    rows, MAX_PAGES = [], 10
+    for tid in tids:
+        page = 1
+        while page <= MAX_PAGES:
+            body = {"page": page, "pageSize": PAGE_SIZE, "templateId": tid}
+            if conds:
+                body["systemConditions"] = conds
+            if state_codes:
+                body["stateList"] = state_codes
+            d = cli(["task", "search", "--data", json.dumps(body, ensure_ascii=False), "-o", "raw"])
+            batch = d.get("content") or []
+            rows.extend(batch)
+            if progress:
+                progress("已拉工单 %d 条" % len(rows))
+            tp = d.get("totalPages") or 0
+            if not batch or page >= tp:
+                break
+            page += 1
+            _check(deadline, "工单查询")
+
+    out, seen = [], set()
+    for t in rows:
+        no = t.get("taskNo") or ""
+        if no and no in seen:
+            continue
+        seen.add(no)
+        cust = (t.get("customerEntity") or {})
+        cname = cust.get("name") or (t.get("customer") or {}).get("name") or ""
+        attr = t.get("attribute") or {}
+        serial = cust.get("serialNumber") or attr.get("field_bQ4PDxGD1TqvSbFU") or ""
+        # 列表行里负责人常在 executorUser.displayName（executorName 为空），2026-11-13 修
+        ex = (t.get("executorName")
+              or (t.get("executorUser") or {}).get("displayName")
+              or (t.get("executor") or {}).get("displayName") or "")
+        desc = t.get("description") or ""
+        if keyword:
+            hay = " ".join([no, str(serial), cname, ex, desc])
+            if keyword not in hay:
+                continue
+        out.append({
+            "工单编号": no,
+            "工单类型": t.get("templateName") or "",
+            "客户编号": str(serial or ""),
+            "客户": cname,
+            "状态": STATE_CN.get(t.get("state"), t.get("state") or ""),
+            "负责人": ex,
+            "创建时间": _fmt_dt(t.get("createTime")),
+            "更新日期": _fmt_dt(t.get("updateTime")),
+            "计划开始": _fmt_dt(t.get("planStartTime")),
+            "计划结束": _fmt_dt(t.get("planEndTime")),
+            "__id": t.get("id") or "",
+        })
+    # 排序：先按时间倒序，再按类型顺序稳定排序 → 工程工单排最前，其他按预调试/调试/…顺序
+    out.sort(key=lambda x: (x.get("创建时间") or "", x.get("工单编号") or ""), reverse=True)
+    _order = {nm: i for i, nm in enumerate(TASK_TYPES.keys())}
+    out.sort(key=lambda x: _order.get(x.get("工单类型"), 99))
+    return _resp("ol:task-query", out, TASK_QUERY_COLUMNS, persons=list(TASK_TYPES.keys()))
+
+
+def q_issue_tasks(params, progress, deadline):
+    """问题工单（在线）：PAAS 表单，列名与本地 bkent:paas 一致（由接口返回的 columns 决定）"""
+    keyword = (params.get("keyword") or "").strip()
+    rows, page, cols = [], 1, []
+    MAX_PAGES = 10
+    while page <= MAX_PAGES:
+        argv = ["paas", "form", "search",
+                "--template-biz-id", ISSUE_TEMPLATE_BIZ_ID,
+                "--page-num", str(page), "--page-size", str(PAGE_SIZE), "-o", "raw"]
+        if keyword:
+            argv += ["--keyword", keyword]
+        d = cli(argv)
+        if not cols:
+            cols = d.get("columns") or []
+        batch = d.get("rows") or []
+        rows.extend(batch)
+        if progress:
+            progress("已拉表单 %d 条" % len(rows))
+        tp = (d.get("page") or {}).get("totalPages") or 0
+        if not batch or page >= tp:
+            break
+        page += 1
+        _check(deadline, "问题工单")
+
+    fields = [c.get("field") for c in cols]
+    labels = [c.get("label") or c.get("field") for c in cols]
+    out = []
+    for r in rows:
+        item = {}
+        for f, lab in zip(fields, labels):
+            v = r.get(f)
+            if isinstance(v, list):
+                v = "；".join(str(x) for x in v if x not in (None, ""))
+            elif isinstance(v, dict):
+                v = v.get("label") or v.get("name") or v.get("displayName") or str(v)
+            item[lab] = "" if v is None else str(v)
+        item["__id"] = r.get("bizId") or ""
+        out.append(item)
+    return _resp("ol:issue-tasks", out, labels)
+
+
 HANDLERS = {
     "ol:trip": q_trip,
     "ol:weekly-plan": q_weekly,
@@ -1555,6 +1723,8 @@ HANDLERS = {
     "ol:maintain-progress": q_maint,
     "ol:accept-progress": q_accept,
     "ol:audit-check": q_audit_check,
+    "ol:task-query": q_task_query,
+    "ol:issue-tasks": q_issue_tasks,
 }
 
 

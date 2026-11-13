@@ -49,8 +49,8 @@ body { font-family:-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB',san
 .group.collapsed .group-title .caret { transform:rotate(-90deg); }
 .group.collapsed .group-items { display:none; }
 /* 签名细节：每行左侧 3px 刻度线，激活时点亮为仪表绿 */
-.item { position:relative; display:flex; align-items:center; gap:8px; padding:9px 20px 9px 36px; font-size:13.5px; color:var(--side-ink); cursor:pointer; white-space:nowrap; transition:background-color .12s ease,color .12s ease; }
-.item::before { content:""; position:absolute; left:20px; top:50%; width:3px; height:14px; margin-top:-7px; background:rgba(255,255,255,.16); border-radius:1.5px; transition:background-color .12s ease,height .12s ease,margin-top .12s ease; }
+.item { position:relative; display:flex; align-items:center; gap:8px; padding:9px 20px 9px 52px; font-size:13.5px; color:var(--side-ink); cursor:pointer; white-space:nowrap; transition:background-color .12s ease,color .12s ease; }
+.item::before { content:""; position:absolute; left:36px; top:50%; width:3px; height:14px; margin-top:-7px; background:rgba(255,255,255,.16); border-radius:1.5px; transition:background-color .12s ease,height .12s ease,margin-top .12s ease; }
 .item:hover { background:var(--side-2); color:#fff; }
 .item.active { background:var(--side-2); color:#fff; }
 .item.active::before { background:var(--accent-bright); height:18px; margin-top:-9px; }
@@ -85,7 +85,7 @@ body { font-family:-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB',san
 .form-group input:focus, .form-group select:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
 /* ── 多选下拉（错误类型筛选）── */
 .ms-wrap { position:relative; }
-.ms-btn { padding:8px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); font-size:14px; background:var(--surface); cursor:pointer; min-width:170px; text-align:left; color:var(--ink); }
+.ms-btn { padding:8px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); font-size:14px; background:var(--surface); cursor:pointer; width:170px; min-width:170px; max-width:170px; text-align:left; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .ms-btn:hover { border-color:var(--accent); }
 .ms-panel { display:none; position:absolute; top:100%; left:0; margin-top:6px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); box-shadow:0 8px 24px rgba(20,28,25,.10); padding:6px 0; min-width:190px; z-index:60; max-height:260px; overflow:auto; }
 .ms-item { display:flex; align-items:center; gap:8px; padding:8px 12px; font-size:13px; cursor:pointer; white-space:nowrap; }
@@ -144,6 +144,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, .item:focus-vis
   .crumb-note { display:none; }
   .body { padding:12px; }
 }
+/* 2026-11-13 工单详情弹窗 */
+.tmodal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:999}
+.tmodal-box{background:#fff;border-radius:10px;max-width:820px;width:92%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.2)}
+.tmodal-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e6e9ee;font-weight:600;color:#2b4353}
+.tmodal-head button{border:0;background:none;font-size:22px;line-height:1;cursor:pointer;color:#666}
+.tmodal-body{padding:14px 16px;overflow:auto}
+.tmodal-body table.kv{width:100%;border-collapse:collapse}
+.tmodal-body table.kv th{width:28%;text-align:left;color:#5a6b7b;font-weight:500;padding:6px 8px;vertical-align:top;border-bottom:1px solid #f0f2f5}
+.tmodal-body table.kv td{padding:6px 8px;border-bottom:1px solid #f0f2f5;word-break:break-all}
+.tmodal-body .sub{margin:14px 0 6px;font-weight:600;color:#2b4353}
+tr.clickable-row{cursor:pointer}
+tr.clickable-row:hover{background:#f2f7f7}
 </style>
 </head>
 <body>
@@ -248,31 +260,34 @@ if (userTabs && userTabs.length) currentTab = (userTabs.indexOf('bk_overview') >
 
 // ── 侧边栏菜单（分组）──
 const AUDIT_KEY = '__audit__';
-const GROUP_ORDER = ['概览', '工单', '客户', '在线报表', '本地报表', '系统'];
+const GROUP_ORDER = ['概览', '工单在线查询', '工单备份', '客户备份', '在线报表', '本地报表', '系统'];
 // 分组标题图标（只加在分组上，Tab 项不加）
 const _svgIco = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
 const GROUP_ICONS = {
   '概览': _svgIco('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
-  '工单': _svgIco('<path d="M14 3v5h5"/><path d="M19 8.5V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h8z"/><path d="M8 13h8M8 17h5"/>'),
-  '客户': _svgIco('<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.5a3 3 0 0 1 0 5M18 20a6 6 0 0 0-2-4.5"/>'),
+  '工单备份': _svgIco('<path d="M14 3v5h5"/><path d="M19 8.5V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h8z"/><path d="M8 13h8M8 17h5"/>'),
+  '工单在线查询': _svgIco('<path d="M14 3v5h5"/><path d="M19 8.5V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h8z"/><circle cx="10.5" cy="13" r="3"/><path d="M12.8 15.3L16 18.5"/>'),
+  '客户备份': _svgIco('<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.5a3 3 0 0 1 0 5M18 20a6 6 0 0 0-2-4.5"/>'),
   '在线报表': _svgIco('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/>'),
   '本地报表': _svgIco('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
   '系统': _svgIco('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>')
 };
 function groupOf(key) {
+  // 2026-11-13：工单查询 / 问题工单归到独立分组「工单在线查询」
+  if (key === 'ol:task-query' || key === 'ol:issue-tasks') return '工单在线查询';
   if (key.slice(0, 3) === 'ol:') return '在线报表';              // 在线报表（云端实时）
   if (key === 'bk_overview') return '概览';
-  if (key.slice(0, 3) === 'bk:') return '工单';
-  if (key.slice(0, 11) === 'bkent:paas:') return '工单';   // 问题工单
-  if (key.slice(0, 6) === 'bkent:') return '客户';          // 客户/联系人/地址/设备
+  if (key.slice(0, 3) === 'bk:') return '工单备份';
+  if (key.slice(0, 11) === 'bkent:paas:') return '工单备份';   // 问题工单
+  if (key.slice(0, 6) === 'bkent:') return '客户备份';      // 客户/联系人/地址/设备
   if (key === 'fieldmap' || key === 'sync' || key === 'synclog') return '系统';  // 数据字典/同步中心/同步日志
   if (key === 'identity') return '系统';                    // 身份管理
   if (key === 'users-account') return '系统';               // 账号管理
   if (key === 'users') return '系统';                       // SHB用户
-  if (key === 'station') return '客户';                     // 站点信息
+  if (key === 'station') return '客户备份';                 // 站点信息
   return '本地报表';                                        // 行程单/项目进度/项目进度2
 }
-const DEFAULT_COLLAPSED = {'概览': true, '工单': true, '客户': true, '在线报表': false, '本地报表': true, '系统': true};
+const DEFAULT_COLLAPSED = {'概览': true, '工单在线查询': true, '工单备份': true, '客户备份': true, '在线报表': true, '本地报表': true, '系统': true};
 const COLLAPSED = Object.assign({}, DEFAULT_COLLAPSED);   // 分组折叠状态（会话内记忆）
 function renderMenu() {
   const menu = document.getElementById('menu');
@@ -322,6 +337,7 @@ function renderMenu() {
     const _txt = _quiet ? '' : (TAB_NOTES[currentTab] || '');
     _note.textContent = _txt;
     _note.title = _txt;
+    _note.style.color = (currentTab === 'ol:task-query') ? '#d63031' : '';
   }
   const _wp = document.getElementById('wpTabs');
   if (_wp) {
@@ -354,8 +370,9 @@ const TRIP_WORK_TIP = [
   '同一人同一天多单用「；」连接'
 ].join('\n');
 
-const NO_EXPORT = {records: true, 'weekly-plan': true};
-const NO_SAVE = {records: true, 'debug-progress': true, progress2: true, 'weekly-plan': true};
+const NO_EXPORT = {records: true};
+const NO_SAVE = {records: true, 'debug-progress': true, progress2: true, 'weekly-plan': true,
+                 'maintain-progress': true, 'accept-progress': true};
 const RESULT_FORMS = {
   trip: [
     {id:'trip_person', label:'姓名', ph:'姓名（空=全部）'},
@@ -397,11 +414,22 @@ const RESULT_FORMS = {
     {id:'debug_kw', label:'关键字', ph:'工单编号/客户编号/客户名（可空=全部）'},
     {id:'debug_begin', label:'日期从', type:'date', tip:'实际调试完成日期'},
     {id:'debug_end', label:'日期至', type:'date', tip:'实际调试完成日期'}
+  ],
+  // 2026-11-13 新增：口径照搬在线版
+  'maintain-progress': [
+    {id:'mp_kw', label:'关键字', ph:'项目编号/项目名称/工单号（空=全部）'},
+    {id:'mp_begin', label:'日期从', type:'date', tip:'工单开始时间（留空=不限）'},
+    {id:'mp_end', label:'日期至', type:'date', tip:'工单开始时间（留空=不限）'}
+  ],
+  'accept-progress': [
+    {id:'ap_kw', label:'关键字', ph:'项目编号/项目名称/工单号（空=全部）'},
+    {id:'ap_begin', label:'日期从', type:'date', tip:'工单开始时间（留空=不限）'},
+    {id:'ap_end', label:'日期至', type:'date', tip:'工单开始时间（留空=不限）'}
   ]
 };
 
 // ══ 在线报表（ol:*）—— 云端实时查询，与本地库无关（2026-11-10）══
-const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress', 'ol:maintain-progress', 'ol:accept-progress', 'ol:audit-check'];
+const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress', 'ol:maintain-progress', 'ol:accept-progress', 'ol:audit-check', 'ol:task-query', 'ol:issue-tasks'];
 // 项目进度（在线）查询口径说明（显示在页面标题右侧，红色小字）
 const PROGRESS2_NOTE = '说明：关键字按客户编号或客户名称模糊匹配，不限时间；日期筛选客户档案的最后更新日期，留空表示不限；默认隐藏已填保运完毕日期的客户，勾选「显示已完成」才显示。';
 // 调试进度（在线）说明
@@ -414,7 +442,8 @@ const ACCEPT_NOTE = '说明：关键字按项目编号、项目名称、工单�
 const WORKLOAD_NOTE = '说明：每天到场/离场都要打卡；工时按「到场→下一次离场」配对、按天累加，跨天不拆分；同一天多次签到取最早/最晚；\n只缺到场：用「到达时间」代替或用 9:00 计算；只缺离场：按当天 17:00 计算；到场离场都缺的，不计工时。有兜底计算的行，工时标红可点击查看原因。';
 // 稽核检查（在线）说明（2026-11-12 按 hunter 定稿口径重写）
 const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月。\n重复工单：仅查工程/预调试/调试/验收/保运五类，同客户同类型超过 1 单即报，涉及人员取建单人，「时间」列取各单建单日期（多单换行）。\n漏打卡：查全部工单类型，只看已开始的单，按参与人（协同人+实际签到人）检查到场/离场打卡，「时间」列取缺卡日期。\n计划日期未填：除工程工单外全部类型，计划开始/结束时间缺失即报，涉及人员取负责人，不涉及时间。\n验收整改：仅验收工单，「是否合格」为不合格且整改内容子表单为空即报，涉及人员取负责人（未分配则跳过），不涉及时间。';
-const TAB_NOTES = {'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
+const TASK_QUERY_NOTE = '说明：默认只查当天的工单（按更新日期）；状态可多选；关键字匹配工单号、客户编号、客户名称、负责人。';
+const TAB_NOTES = {'ol:task-query': TASK_QUERY_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
   'ol:trip': [
@@ -457,6 +486,21 @@ const ONLINE_FORMS = {
     {id:'olaud_type', label:'错误类型', type:'multiselect', param:'types', options:['重复工单','漏打卡','计划日期未填','验收整改']},
     {id:'olaud_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单创建时间'},
     {id:'olaud_end', label:'日期至', type:'date', param:'date_end', tip:'工单创建时间'}
+  ],
+  // 2026-11-13 新增：在线工单查询
+  'ol:task-query': [
+    {id:'oltq_kw', label:'关键字', ph:'工单号/客户编号/客户名称/负责人', param:'keyword',
+     tip:'模糊匹配：工单号、客户编号、客户名称、负责人、描述。'},
+    {id:'oltq_begin', label:'更新日期从', type:'date', param:'date_begin',
+     tip:'按工单「更新时间」筛选。编辑、打卡、状态流转都会刷新更新时间；默认当天。'},
+    {id:'oltq_end', label:'更新日期至', type:'date', param:'date_end',
+     tip:'按工单「更新时间」筛选。与「更新日期从」配合成区间；留空表示不限。'},
+    {id:'oltq_state', label:'状态', type:'multiselect', param:'states',
+     tip:'工单当前状态，可多选；全部不选=不限状态。',
+     options:['待指派','已指派','已接受','进行中','已完成','已拒绝','已结算','已关闭','已取消']}
+  ],
+  'ol:issue-tasks': [
+    {id:'olit_kw', label:'关键字', ph:'编号/客户/内容（空=全部）', param:'keyword'}
   ]
 };
 
@@ -470,7 +514,8 @@ function buildResultForm(tab) {
   cfg.forEach(f => {
     if (f.type === 'multiselect') {
       const opts = f.options || [];
-      html += '<div class="form-group"><label>' + esc(f.label) + '</label>'
+      const _mtip = f.tip ? ' <span class="qmark" style="cursor:pointer;vertical-align:middle" onclick="showTip(event,this,' + JSON.stringify(f.tip).replace(/"/g,'&quot;') + ')">?</span>' : '';
+      html += '<div class="form-group"><label style="display:flex;align-items:center;gap:2px">' + esc(f.label) + _mtip + '</label>'
             + '<div class="ms-wrap" id="' + f.id + '">'
             + '<button type="button" class="ms-btn" onclick="_msToggle(\'' + f.id + '\', event)">全部 ▾</button>'
             + '<div class="ms-panel" id="' + f.id + '_panel" onclick="event.stopPropagation()">'
@@ -479,6 +524,16 @@ function buildResultForm(tab) {
                 return '<label class="ms-item"><input type="checkbox" class="ms-opt" value="' + esc(o) + '" checked onchange="_msLabel(\'' + f.id + '\')">' + esc(o) + '</label>';
               }).join('')
             + '</div></div></div>';
+      return;
+    }
+    if (f.type === 'select') {
+      const opts = f.options || [];
+      html += '<div class="form-group"><label>' + esc(f.label) + '</label>'
+            + '<select id="' + f.id + '">' + opts.map(function(o){
+                const ov = (o && o.value !== undefined) ? o.value : o;
+                const ol = (o && o.label !== undefined) ? o.label : o;
+                return '<option value="' + esc(ov) + '">' + esc(ol) + '</option>';
+              }).join('') + '</select></div>';
       return;
     }
     if (f.type === 'checkbox') {
@@ -510,6 +565,13 @@ function buildResultForm(tab) {
     const _sun = new Date(_mon); _sun.setDate(_mon.getDate() + 6);
     if (_wb && !_wb.value) _wb.value = _isoDate(_mon);
     if (_we && !_we.value) _we.value = _isoDate(_sun);
+  }
+  // 工单查询：默认只查当天（2026-11-13 hunter 定）
+  const _tqb = document.getElementById('oltq_begin'), _tqe = document.getElementById('oltq_end');
+  if (_tqb || _tqe) {
+    const _today = _isoDate(new Date());
+    if (_tqb && !_tqb.value) _tqb.value = _today;
+    if (_tqe && !_tqe.value) _tqe.value = _today;
   }
   const rm = document.getElementById('rec_month');
   if (rm && !rm.value) rm.value = new Date().toISOString().slice(0,7);
@@ -572,9 +634,30 @@ function setSaveButtons(dis) {
 }
 
 // 行程单：人名标签（初始“全部”；点某人=只看某人）
+let _tqType = '__all__';   // 2026-11-13 hunter 定：默认全部
+function pickTaskType(name) { _tqType = name; currentPage = 1; fetchAndRender(); }
+
 function renderPersonBar(persons) {
   const bar = document.getElementById('person-bar');
   if (!bar) return;
+  if (currentTab === 'ol:task-query') {
+    if (!persons || !persons.length) { bar.style.display='none'; bar.innerHTML=''; return; }
+    bar.innerHTML = ''; bar.style.display = 'flex'; bar.style.flexWrap = 'wrap'; bar.style.gap = '6px';
+    const _tcol = {'工程工单':'#1a73e8','预调试工单':'#7b61ff','调试工单':'#0e9f6e',
+                   '验收工单':'#c2761b','保运工单':'#16a3a3','售后工单':'#d63031',
+                   '日常工单':'#5a6b7b','改造工单':'#b45309'};
+    const mk2 = (label, val) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (_tqType === val ? ' active' : '');
+      b.textContent = label;
+      if (val !== '__all__' && _tcol[val]) { b.style.color = _tcol[val]; b.style.borderColor = _tcol[val]; }
+      b.onclick = () => pickTaskType(val);
+      bar.appendChild(b);
+    };
+    mk2('全部', '__all__');
+    persons.forEach(p => mk2(p, p));
+    return;
+  }
   if ((currentTab !== 'trip' && currentTab !== 'ol:trip') || !persons || !persons.length) {
     bar.style.display = 'none'; bar.innerHTML = ''; return;
   }
@@ -738,6 +821,7 @@ function onlineParams() {
     if (v) p[f.param] = v;
   });
   if (currentTab === 'ol:weekly-plan') p.mode = weeklyMode || 'plan';
+  if (currentTab === 'ol:task-query') p.types = _tqType || '__all__';
   return p;
 }
 
@@ -783,10 +867,41 @@ async function fetchOnline() {
   }
 }
 
+async function openTaskDetail(el) {
+  const id = (el && el.getAttribute) ? el.getAttribute('data-id') : el;
+  const box = document.getElementById('task-modal');
+  const body = document.getElementById('task-modal-body');
+  if (!box || !body) return;
+  box.style.display = 'flex';
+  body.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const d = await (await fetch('/shb/api/online/task-detail?id=' + encodeURIComponent(id))).json();
+    if (!d.ok) throw new Error(d.error || '加载失败');
+    const b = (d.detail || {}).basic || {};
+    let h = '<table class="kv">';
+    Object.keys(b).forEach(k => { h += '<tr><th>' + esc(k) + '</th><td>' + esc(b[k]) + '</td></tr>'; });
+    h += '</table>';
+    const at = (d.detail || {}).attrs || [];
+    if (at.length) {
+      h += '<div class="sub">其他字段</div><table class="kv">';
+      at.forEach(a => { h += '<tr><th>' + esc(a.label || a.field) + '</th><td>' + esc(a.value) + '</td></tr>'; });
+      h += '</table>';
+    }
+    body.innerHTML = h;
+  } catch (e) {
+    body.innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+  }
+}
+function closeTaskDetail() {
+  const box = document.getElementById('task-modal');
+  if (box) box.style.display = 'none';
+}
+
 function renderResultData(data) {
   const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
   if (data.sections) { renderSections(data); pg.style.display = 'none'; return; }
   if (!data.rows || !data.rows.length) {
+    if (data.persons) renderPersonBar(data.persons);   // 2026-11-13：0 条时类型条仍要显示
     tc.innerHTML = '<div class="empty">暂无数据</div>'; pg.style.display = 'none'; return;
   }
   const cols = (data.columns && data.columns.length) ? data.columns : Object.keys(data.rows[0]);
@@ -805,7 +920,7 @@ function renderResultData(data) {
     }
     return '<th' + _thTitle + (_rawCells && ci === 0 ? ' style="text-align:center"' : '') + '>' + _th + '</th>';
   }).join('') + '</tr></thead><tbody>';
-  data.rows.forEach(row => { html += '<tr>' + cols.map((c, ci) => {
+  data.rows.forEach(row => { const _rowAttr = (currentTab === 'ol:task-query' && row.__id) ? ' class="clickable-row" onclick="openTaskDetail(this)" data-id="' + esc(String(row.__id)) + '"' : ''; html += '<tr' + _rowAttr + '>' + cols.map((c, ci) => {
     const _v = row[c] == null ? '' : row[c];
     if (_rawCells) return '<td title="'+esc(String(_v).replace(/<br\s*\/?>/gi,' / '))+'" class="col-wrap"'+(ci === 0 ? ' style="text-align:center"' : '')+'>'+_v+'</td>';
     // 2026-11-12：行程单「工单编号」「工单类型」、稽核检查「时间」多个值换行显示
@@ -821,6 +936,28 @@ function renderResultData(data) {
       if (_vt === '有误' || _vt === '未完成') {
         return '<td title="'+esc(_v)+'" class="col-text" style="color:#d63031;font-weight:600">'+esc(_v)+'</td>';
       }
+    }
+    // 工单查询（2026-11-13）：创建时间/更新日期只显示到日，悬停仍显示完整时间
+    if (currentTab === 'ol:task-query' && (c === '创建时间' || c === '更新日期' || c === '计划开始' || c === '计划结束')) {
+      const _full = String(_v || '');
+      const _d = _full.slice(0, 10);
+      return '<td title="' + esc(_full) + '" class="col-text">' + esc(_d) + '</td>';
+    }
+    // 工单查询（2026-11-13）：工单类型配色
+    if (currentTab === 'ol:task-query' && c === '工单类型') {
+      const _tm = {'工程工单':'#1a73e8','预调试工单':'#7b61ff','调试工单':'#0e9f6e',
+                   '验收工单':'#c2761b','保运工单':'#16a3a3','售后工单':'#d63031',
+                   '日常工单':'#5a6b7b','改造工单':'#b45309'};
+      const _tc = _tm[String(_v).trim()];
+      if (_tc) return '<td title="'+esc(_v)+'" class="col-text" style="color:'+_tc+';font-weight:600">'+esc(_v)+'</td>';
+    }
+    // 工单查询（2026-11-13）：不同状态不同颜色
+    if (currentTab === 'ol:task-query' && c === '状态') {
+      const _sm = {'已完成':'#12855b','进行中':'#1a73e8','待指派':'#c2761b','已指派':'#c2761b',
+                   '已接受':'#c2761b','已拒绝':'#d63031','已取消':'#8a94a6',
+                   '已结算':'#5a6b7b','已关闭':'#5a6b7b'};
+      const _sc = _sm[String(_v).trim()];
+      if (_sc) return '<td title="'+esc(_v)+'" class="col-text" style="color:'+_sc+';font-weight:600">'+esc(_v)+'</td>';
     }
     // 验收进度（2026-11-11 hunter 定）：「是否合格」列值精确等于「不合格」→ 红字加粗（该值固定，不做包含匹配）
     if (currentTab === 'ol:accept-progress' && c === '是否合格' && String(_v).trim() === '不合格') {
@@ -926,7 +1063,7 @@ async function fetchAndRender() {
 function doExport() {
   if (isOnlineTab(currentTab)) { doExportOnline(); return; }
   const params = new URLSearchParams({ tab: currentTab });
-  const isRes = !!RESULT_FORMS[currentTab];
+  const isRes = !!RESULT_FORMS[currentTab] || currentTab === 'fieldmap';
   let kw = document.getElementById('keyword').value.trim();
   let db = document.getElementById('date_begin').value;
   let de = document.getElementById('date_end').value;
@@ -961,6 +1098,16 @@ function doExport() {
     if (done2) params.set('show_done', '1');
     if (b2) params.set('date_begin', b2);
     if (e2) params.set('date_end', e2);
+  } else if (currentTab === 'fieldmap') {
+    if (kw) params.set('keyword', kw);
+  } else if (currentTab === 'maintain-progress' || currentTab === 'accept-progress') {
+    const pre = (currentTab === 'maintain-progress') ? 'mp' : 'ap';
+    kw = (document.getElementById(pre + '_kw')||{value:''}).value.trim();
+    db = (document.getElementById(pre + '_begin')||{value:''}).value;
+    de = (document.getElementById(pre + '_end')||{value:''}).value;
+    if (kw) params.set('keyword', kw);
+    if (db) params.set('date_begin', db);
+    if (de) params.set('date_end', de);
   } else {
     kw = (document.getElementById('user_name')||{value:''}).value.trim();
     const d2 = (document.getElementById('user_dept')||{value:''}).value.trim();
@@ -1019,6 +1166,34 @@ async function doExportExcel(baseParams) {
     }
     box.textContent = '正在生成 Excel...';
     const tab = currentTab;
+    // 周计划：一个文件两个 sheet，网格版式（行=负责人，列=周一~周日），与页面一致
+    if (tab === 'weekly-plan') {
+      box.textContent = '正在生成周计划 / 周总结…';
+      const fetchMode = async (mode) => {
+        const q = new URLSearchParams(baseParams);
+        q.set('tab', 'weekly-plan'); q.set('mode', mode);
+        q.set('page', '1'); q.set('page_size', '500');
+        const d = await (await fetch('/shb/api/search?' + q.toString())).json();
+        if (!d.ok) throw new Error(d.error || '查询失败');
+        return d;
+      };
+      const [pl, sm] = await Promise.all([fetchMode('plan'), fetchMode('summary')]);
+      const wb0 = XLSX.utils.book_new();
+      const addGrid = (name, data) => {
+        const rawCols = data.columns || [];
+        const aoa = [rawCols.map(_cellText)];
+        (data.rows || []).forEach(r => aoa.push(rawCols.map(c => _cellText(r[c]))));
+        XLSX.utils.book_append_sheet(wb0, XLSX.utils.aoa_to_sheet(aoa), name);
+      };
+      addGrid('周计划', pl);
+      addGrid('周总结', sm);
+      const _ws = String(pl.week_start || '').replace(/-/g, '');
+      const _we = String(pl.week_end || '').replace(/-/g, '');
+      const _fn = '周计划_' + _ws + '-' + _we + '.xlsx';
+      XLSX.writeFile(wb0, _fn);
+      box.textContent = '已生成 ' + _fn + '（周计划 ' + (pl.rows || []).length + ' 人 / 周总结 ' + (sm.rows || []).length + ' 人）';
+      return;
+    }
     const { cols, rows } = await fetchAllRows(tab, tab === 'trip' ? new URLSearchParams() : baseParams);
     if (!rows.length) { box.textContent = '当前条件下没有数据可导出'; return; }
     const wb = XLSX.utils.book_new();
@@ -1035,12 +1210,22 @@ async function doExportExcel(baseParams) {
     } else {
       const aoa = [cols];
       rows.forEach(r => aoa.push(cols.map(c => r[c])));
-      const _sheet = tab === 'workload' ? '服务人员工作量' : (tab === 'progress2' ? '项目进度2' : '项目进度');
+      const _sheet = tab === 'fieldmap' ? '数据字典'
+                   : (tab === 'workload' ? '服务人员工作量'
+                   : (tab === 'maintain-progress' ? '保运进度'
+                   : (tab === 'accept-progress' ? '验收进度'
+                   : '项目进度')));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheet);
     }
     const d = new Date();
     const stamp = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
-    const fname = (tab === 'trip' ? '行程单_' : (tab === 'workload' ? '服务人员工作量_' : (tab === 'progress2' ? '项目进度2_' : '项目进度_'))) + stamp + '.xlsx';
+    const _base = tab === 'fieldmap' ? '数据字典_'
+                : (tab === 'trip' ? '行程单_'
+                : (tab === 'workload' ? '服务人员工作量_'
+                : (tab === 'maintain-progress' ? '保运进度_'
+                : (tab === 'accept-progress' ? '验收进度_'
+                : '项目进度_'))));
+    const fname = _base + stamp + '.xlsx';
     XLSX.writeFile(wb, fname);
     box.textContent = '已生成 ' + fname + '（' + rows.length + ' 行' + (tab === 'trip' ? '，按人分页签' : '') + '）';
   } catch (e) {
@@ -1098,6 +1283,8 @@ async function doExportOnline() {
                 'ol:maintain-progress':'保运进度（在线）',
                 'ol:accept-progress':'验收进度（在线）',
                 'ol:audit-check':'稽核检查（在线）',
+                'ol:task-query':'工单查询',
+                'ol:issue-tasks':'问题工单',
                 'ol:weekly-plan':'周计划（在线）'}[currentTab] || '在线报表';
   try {
     if (typeof XLSX === 'undefined') {
@@ -1537,7 +1724,7 @@ function switchToTab(tab) {
   document.getElementById('audit-filter').style.display = 'none';
   const eb = document.getElementById('export-btn');
   eb.style.display = (userTabs && userTabs.includes(tab) && !isOverview && !NO_EXPORT[tab]) ? '' : 'none';
-  eb.innerHTML = (isRes ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV');
+  eb.innerHTML = ((isRes || tab === 'fieldmap') ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV');
   updateJobBox();
   if (tab !== 'trip') renderPersonBar(null);
   currentTab = tab; currentPage = 1; renderMenu(); doSearch();
@@ -1739,5 +1926,11 @@ const _eb = document.getElementById('export-btn');
 _eb.style.display = (isAdmin && currentTab !== 'bk_overview' && !NO_EXPORT[currentTab]) ? '' : 'none';
 _eb.innerHTML = (RESULT_FORMS[currentTab] ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV');
 </script>
+<div id="task-modal" class="tmodal" style="display:none" onclick="if(event.target===this)closeTaskDetail()">
+  <div class="tmodal-box">
+    <div class="tmodal-head"><span>工单详情</span><button onclick="closeTaskDetail()" title="关闭">×</button></div>
+    <div id="task-modal-body" class="tmodal-body"></div>
+  </div>
+</div>
 </body>
 </html>

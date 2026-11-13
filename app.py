@@ -135,6 +135,7 @@ PAAS_TAB_SKIP = {STATION_ENTITY}
 # 2026-11-12 hunter 定：本地去掉旧「项目进度」页签（原 progress），「项目进度2」改名为「项目进度」
 RESULT_TITLES = {"trip": "行程单", "weekly-plan": "周计划", "progress2": "项目进度",
                   "workload": "服务人员工作量", "debug-progress": "调试进度",
+                 "maintain-progress": "保运进度", "accept-progress": "验收进度",
                  "records": "工单动态", "users": "SHB用户"}
 
 # ══ 在线报表（2026-11-10 新增，hunter 批准）═════════════════════════════
@@ -149,6 +150,8 @@ ONLINE_TABS = {
     "ol:maintain-progress": "保运进度（在线）",
     "ol:accept-progress": "验收进度（在线）",
     "ol:audit-check": "稽核检查（在线）",
+    "ol:task-query": "工单查询",
+    "ol:issue-tasks": "问题工单",
 }
 ONLINE_CACHE_TTL = 1800  # 在线报表结果缓存 30 分钟（2026-11-10 hunter 定）
 # 不缓存的在线报表：当前为空（2026-11-11 hunter 定）。
@@ -518,6 +521,34 @@ def query_workload(date_begin="", date_end="", keyword="", page=1, page_size=50)
             "persons": persons}
 
 
+# ── 2026-11-13 恢复：11-12 22:11 改日期筛选时覆盖丢失的常量块 ──
+# 来源：app.py.bak-20261111-1638-audit-types（原样恢复，未改动取值）
+# ══ 项目进度2（2026-10-27 新增）════════════════════════════════════════
+# 口径：本地客户档案取数，一行一客户编号；12 个日期字段任一非空才显示；
+#      调试人员 = 调试工单负责人 + 协同人（逗号隔开）；运行日期 = 保运完毕日期。
+PROGRESS2_COLUMNS = [
+    "客户编号", "客户名称",
+    "设备发货日期", "安装开始日期", "安装完毕日期", "工程验收日期",
+    "调试物品发货日期", "调试开始日期", "调试完毕日期", "调试人员",
+    "消防验收日期", "计量验收日期", "充装验收日期",
+    "保运开始日期", "保运完毕日期", "保运人员", "运行日期",
+]
+P2_DATE_FIELDS = [
+    ("field_4Du9tW3FdX5ofNd7", "设备发货日期"),
+    ("field_pWtw8xgz7KTQVXaV", "安装开始日期"),
+    ("field_XIbL8TbFkaQO7yCq", "安装完毕日期"),
+    ("field_DM2DAoBb203rhrVf", "工程验收日期"),
+    ("field_uBS7HOVJAndqk3On", "调试物品发货日期"),
+    ("field_d2P4mgHXg1Cmrl9N", "调试开始日期"),
+    ("field_aizN4CQl2gOZpJea", "调试完毕日期"),
+    ("field_LJtmwhb97rF9YfZm", "消防验收日期"),
+    ("field_iW3hzpnLhqiOCkPa", "计量验收日期"),
+    ("field_buJ9ddsuAZn8nvDp", "充装验收日期"),
+    ("field_2gfjf8Zl09aWwuab", "保运开始日期"),
+    ("field_Brf7x05dyDVU9HOL", "保运完毕日期"),
+]
+P2_BAOYUN_PERSON = "field_Yc3YHI7w2qowAOZP"   # 保运人员
+
 def query_progress2(keyword, cust_name, page, page_size, show_done=False,
                     date_begin="", date_end=""):
     """项目进度2：客户档案 17 列（只读本地库）
@@ -727,6 +758,257 @@ def query_weekly_plan(week_start="", mode="plan", keyword=""):
             "html_cells": True,
             "week_start": out["week_start"], "week_end": out["week_end"],
             "persons": out["persons"]}
+
+
+
+# ══ 保运进度 / 验收进度（本地版，2026-11-13 新增）══════════════════════════
+# 口径照搬在线版（online.py q_maint / q_accept），只换数据源：本地备份库。
+# 本地差异：本地没有「节点暂存」（node_temp_storage），只能取已提交值；
+#           在线版的「暂存优先合并」在本地退化为「只用已提交值」。
+MAINT_TASK_TID = "1d0a8205-e753-43b2-b811-9c970c12dab5"
+# 保运「服务内容」11 项（字段 ID 与在线版一致，2026-11-11 核实）
+MAINT_ITEMS = [
+    ("field_Fdlx52zIjIrKAeLs", "1、检查控制系统是否显示正常"),
+    ("field_dsSkKVBWER6TrzeN", "2、检查各阀门开关、控制是否正常"),
+    ("field_7mCCgFC0OzxT5r2U", "3、排除储罐内液氮"),
+    ("field_WJSDwBqVK3v2XAm6", "4、储罐进LNG"),
+    ("field_hqI0u84UGX3uqeER", "5、管路漏点处理、冷紧"),
+    ("field_KkHmn7g8H5bz7LPg", "6、培训卸车操作"),
+    ("field_imFTbYT1HoJhW53J", "7、培训加液操作"),
+    ("field_S0NlIfaLX4pQ1PHa", "8、培训站控系统"),
+    ("field_U88OKT4q1ZMaNYHO", "9、培训收费系统"),
+    ("field_54aaJjrmq6acfKlM", "10、安全培训"),
+    ("field_jTtLugqBo0ndoXAR", "11、其他"),
+]
+MAINT_COLUMNS = ["项目编号", "项目名称", "开始时间", "完成时间"] + [d for _f, d in MAINT_ITEMS]
+
+ACCEPT_TASK_TID = "8024da3e-6881-48d5-ac58-9d0d4ee1da0a"
+ACCEPT_COLUMNS = ["负责人", "项目编号", "项目名称", "工单状态", "开始时间", "完成时间",
+                  "验收类别", "是否合格", "整改内容"]
+
+_LV_STATE_CN = {"created": "待指派", "allocated": "已指派", "accepted": "已接受",
+                "processing": "进行中", "finished": "已完成", "refused": "已拒绝",
+                "costed": "已结算", "closed": "已关闭", "offed": "已取消",
+                "taskPool": "工单池"}
+
+
+def _lv_ts(v):
+    """毫秒时间戳 / 字符串时间 → datetime；解析失败返回 None"""
+    if v in (None, "", 0, "0"):
+        return None
+    try:
+        n = int(v)
+        if n > 1000000000000:
+            n = n / 1000.0
+        return datetime.fromtimestamp(n)
+    except (TypeError, ValueError):
+        pass
+    s = str(v).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _lv_text(v):
+    """单元格值 → 文本；子表单（list[dict]）逐行拼接，多行用「；」连接"""
+    if v is None or v == "" or v == [] or v == {}:
+        return ""
+    if isinstance(v, list):
+        parts = []
+        for row in v:
+            if not isinstance(row, dict):
+                s = str(row).strip()
+                if s:
+                    parts.append(s)
+                continue
+            vals = [str(x).strip() for k, x in row.items()
+                    if k != "subFormContentId" and str(x or "").strip()]
+            if vals:
+                parts.append("；".join(vals))
+        return "；".join(parts)
+    if isinstance(v, dict):
+        vals = [str(x).strip() for k, x in v.items() if str(x or "").strip()]
+        return "；".join(vals)
+    return str(v).strip()
+
+
+def _lv_load(template_id):
+    """读某工单类型的本地记录 → [(row, detail_dict)]"""
+    conn = backup_conn()
+    try:
+        recs = conn.execute(
+            "select t.id, t.task_no, t.customer_name, t.executor_name, t.state, t.state_cn, "
+            "       t.create_time, r.detail_json "
+            "  from tasks t left join task_raw r on r.id = t.id "
+            " where t.template_id=? and coalesce(t.deleted,0)=0",
+            (template_id,)).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in recs:
+        dj = {}
+        if r["detail_json"]:
+            try:
+                dj = json.loads(r["detail_json"])
+            except Exception:
+                dj = {}
+        out.append((r, dj))
+    return out
+
+
+def _lv_match_window(keyword, st, b, e):
+    """关键字优先（不限时间）；无关键字时按开始时间落在 [b,e] 内"""
+    if keyword:
+        return True
+    if not st:
+        return False
+    if b and st < b:
+        return False
+    if e and st > e:
+        return False
+    return True
+
+
+def _lv_resp(tab, title, all_rows, page, page_size):
+    total = len(all_rows)
+    start = (page - 1) * page_size
+    return {"ok": True, "tab": tab, "title": title,
+            "rows": all_rows[start:start + page_size],
+            "columns": list({"maintain-progress": MAINT_COLUMNS,
+                             "accept-progress": ACCEPT_COLUMNS}[tab]),
+            "total": total, "page": page, "page_size": page_size,
+            "has_next": page * page_size < total, "has_prev": page > 1,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+            "saved_at": ""}
+
+
+def query_maintain_progress(keyword="", date_begin="", date_end="", page=1, page_size=200):
+    """保运进度（本地）：一个项目（客户）一行
+
+    口径（照搬在线版，2026-11-11 hunter 确认）：
+      · 筛选时间 = 工单开始时间；有填关键字时不限时间
+      · 同一客户多单 → 取创建日期最近的一单
+      · 项目编号/项目名称 = 客户编号/客户名称
+      · 服务内容 11 项取已提交值（本地无暂存）
+    """
+    keyword = (keyword or "").strip()
+    b = _lv_ts(date_begin) if date_begin else None
+    e = _lv_ts(date_end) if date_end else None
+    if e:
+        e = e.replace(hour=23, minute=59, second=59)
+
+    best = {}
+    for r, dj in _lv_load(MAINT_TASK_TID):
+        cust = dj.get("customer") or {}
+        serial = (cust.get("serialNumber") or "").strip()
+        cname = (cust.get("name") or r["customer_name"] or "").strip()
+        if keyword and not (keyword in (r["task_no"] or "")
+                            or keyword in serial or keyword in cname):
+            continue
+        st = _lv_ts(dj.get("startTime"))
+        if not _lv_match_window(keyword, st, b, e):
+            continue
+        key = serial or cname
+        if not key:
+            continue
+        ct = _lv_ts(dj.get("createTime")) or _lv_ts(r["create_time"]) or datetime.min
+        cur = best.get(key)
+        if cur is None or ct > cur[0]:
+            best[key] = (ct, r, dj)
+
+    rows = []
+    for _key, (_ct, r, dj) in best.items():
+        attr = dj.get("attribute") or {}
+        cust = dj.get("customer") or {}
+        serial = (cust.get("serialNumber") or "").strip()
+        cname = (cust.get("name") or r["customer_name"] or "").strip()
+        st = _lv_ts(dj.get("startTime"))
+        ft = _lv_ts(dj.get("completeTime"))
+        row = {"项目编号": serial, "项目名称": cname,
+               "开始时间": st.strftime("%Y-%m-%d %H:%M:%S") if st else "",
+               "完成时间": ft.strftime("%Y-%m-%d %H:%M:%S") if ft else ""}
+        for f, label in MAINT_ITEMS:
+            row[label] = _lv_text(attr.get(f))
+        rows.append(row)
+
+    rows.sort(key=lambda x: (x.get("项目编号") or "", x.get("项目名称") or ""))
+    return _lv_resp("maintain-progress", RESULT_TITLES["maintain-progress"], rows, page, page_size)
+
+
+def query_accept_progress(keyword="", date_begin="", date_end="", page=1, page_size=200):
+    """验收进度（本地）：一单一行
+
+    口径（照搬在线版，2026-11-11 hunter 确认）：
+      · 筛选时间 = 工单开始时间；有关键字时不限时间
+      · 关键字 = 项目编号 / 项目名称 / 工单号
+      · 验收类别以验收节点值为准，为空回退工单级值
+      · 整改内容 = 「整改项」子表单
+    """
+    keyword = (keyword or "").strip()
+    b = _lv_ts(date_begin) if date_begin else None
+    e = _lv_ts(date_end) if date_end else None
+    if e:
+        e = e.replace(hour=23, minute=59, second=59)
+
+    rows = []
+    for r, dj in _lv_load(ACCEPT_TASK_TID):
+        cust = dj.get("customer") or {}
+        serial = (cust.get("serialNumber") or "").strip()
+        cname = (cust.get("name") or r["customer_name"] or "").strip()
+        if keyword and not (keyword in (r["task_no"] or "")
+                            or keyword in serial or keyword in cname):
+            continue
+        st = _lv_ts(dj.get("startTime"))
+        if not _lv_match_window(keyword, st, b, e):
+            continue
+
+        attr = dj.get("attribute") or {}
+        ex = ((dj.get("executor") or {}).get("displayName")
+              or r["executor_name"] or "")
+        ft = _lv_ts(dj.get("completeTime"))
+        cat = (_lv_text(attr.get("field_xF3USPMV2qusrPcd"))
+               or _lv_text(attr.get("field_gZKddPgQ15cYoPHu")))
+        rows.append({
+            "负责人": ex,
+            "项目编号": serial,
+            "项目名称": cname,
+            "工单状态": r["state_cn"] or _LV_STATE_CN.get(r["state"], r["state"] or ""),
+            "开始时间": st.strftime("%Y-%m-%d %H:%M:%S") if st else "",
+            "完成时间": ft.strftime("%Y-%m-%d %H:%M:%S") if ft else "",
+            "验收类别": cat,
+            "是否合格": _lv_text(attr.get("field_Kj4IeaWFxaNj4FiJ")),
+            "整改内容": _lv_text(attr.get("field_mOho8BGmdv9B1FGu")),
+        })
+
+    rows.sort(key=lambda x: (x.get("开始时间") or "", x.get("项目编号") or ""), reverse=True)
+    return _lv_resp("accept-progress", RESULT_TITLES["accept-progress"], rows, page, page_size)
+
+
+# ── 2026-11-13 恢复：BACKUP_MAIN_COLUMNS 在早前改动中整块丢失，导致工单组各 bk: 页签全部报
+#    name 'BACKUP_MAIN_COLUMNS' is not defined。来源 app.py.bak-20261112-2111-weekly-core（原样恢复）
+# 工单主表展示列（顺序即表头顺序）
+BACKUP_MAIN_COLUMNS = [
+    ("task_no", "工单编号"),
+    ("state_cn", "状态"),
+    ("customer_name", "客户"),
+    ("description", "描述"),
+    ("level", "等级"),
+    ("service_type", "服务类型"),
+    ("executor_name", "负责人"),
+    ("create_user_name", "创建人"),
+    ("tlm_name", "项目负责人"),
+    ("tlm_phone", "联系电话"),
+    ("taddress_str", "地址"),
+    ("plan_start_time", "计划开始"),
+    ("plan_end_time", "计划结束"),
+    ("create_time", "创建时间"),
+    ("update_time", "更新时间"),
+    ("accept_time", "受理时间"),
+    ("allot_time", "分派时间"),
+]
 
 
 def backup_conn():
@@ -1835,6 +2117,18 @@ def api_search():
                                        show_done=(request.args.get("show_done") == "1"),
                                        date_begin=(request.args.get("date_begin") or "").strip(),
                                        date_end=(request.args.get("date_end") or "").strip())
+            elif tab == "maintain-progress":
+                resp = query_maintain_progress(
+                    keyword,
+                    (request.args.get("date_begin") or "").strip(),
+                    (request.args.get("date_end") or "").strip(),
+                    page, page_size)
+            elif tab == "accept-progress":
+                resp = query_accept_progress(
+                    keyword,
+                    (request.args.get("date_begin") or "").strip(),
+                    (request.args.get("date_end") or "").strip(),
+                    page, page_size)
             elif tab == "weekly-plan":
                 resp = query_weekly_plan((request.args.get("week_start") or "").strip(),
                                          (request.args.get("mode") or "plan").strip(),
@@ -2052,6 +2346,9 @@ def _online_filter(tab, resp, keyword, types=""):
     """
     if not resp:
         return resp
+    # 工单查询 / 问题工单：后端已按关键字过滤，这里不再二次过滤（否则负责人命中会被丢掉）
+    if tab in ("ol:task-query", "ol:issue-tasks"):
+        return resp
     if not keyword and not (tab == "ol:audit-check" and types):
         return resp
     col = _ONLINE_KEYWORD_COL.get(tab)
@@ -2116,6 +2413,102 @@ def _online_worker(job_id, tab, params, cache_key, keyword="", types=""):
                 job_id, tab, j.get("status"), (j.get("progress") or "")[:80])
 
 
+@app.route("/api/online/task-detail")
+def api_online_task_detail():
+    """在线工单详情（弹窗用）：按工单 ID 取 initJson，转成基本字段 + 其他字段"""
+    user = request.headers.get("X-Remote-User", "") or "admin"
+    _, tabs = get_user_permissions()
+    if "ol:task-query" not in tabs:
+        return jsonify({"ok": False, "error": "无权限查看工单详情"}), 403
+    tid = (request.args.get("id") or "").strip()
+    if not tid:
+        return jsonify({"ok": False, "error": "缺少工单 ID"})
+    try:
+        init = shb_online.task_detail(tid)
+    except Exception as e:
+        logger.error("ONLINE_DETAIL_FAIL id=%s err=%s", tid, e)
+        return jsonify({"ok": False, "error": "详情查询失败: %s" % e})
+
+    def _s(v):
+        """单元格值 → 可读文本（2026-11-13 修：子表单不能 str(dict)，要逐行拼字段值）"""
+        if v in (None, "", [], {}):
+            return ""
+        if isinstance(v, dict):
+            return (v.get("displayName") or v.get("name")
+                    or v.get("label") or v.get("value") or "")
+        if isinstance(v, list):
+            parts = []
+            for row in v:
+                if isinstance(row, dict):
+                    vals = []
+                    for k, x in row.items():
+                        if k == "subFormContentId":
+                            continue
+                        sv = _s(x)
+                        if isinstance(sv, str) and sv.strip():
+                            vals.append(sv.strip())
+                    if vals:
+                        parts.append(" / ".join(vals))
+                else:
+                    sv = _s(row)
+                    if isinstance(sv, str) and sv.strip():
+                        parts.append(sv.strip())
+            return "；".join(parts)
+        return str(v)
+
+    def _dt(v):
+        d = shb_online.ts_any(v)
+        return d.strftime("%Y-%m-%d %H:%M:%S") if d else _s(v)
+
+    # initJson 里工单主体在 init["task"]（与 online.py q_maint 同结构），取不到时回退扁平结构
+    task = init.get("task") or init
+    cust = task.get("customer") or {}
+    basic = {
+        "工单编号": _s(task.get("taskNo")),
+        "工单类型": _s(task.get("templateName")),
+        "状态": shb_online.STATE_CN.get(task.get("state"), _s(task.get("state"))),
+        "客户": _s(cust.get("name")),
+        "负责人": _s((task.get("executor") or {}).get("displayName")),
+        "创建人": _s((task.get("createUser") or {}).get("displayName")),
+        "创建时间": _dt(task.get("createTime")),
+        "计划开始": _dt(task.get("planStartTime")),
+        "计划结束": _dt(task.get("planEndTime")),
+        "完成时间": _dt(task.get("completeTime")),
+        "地址": _s(task.get("taddressStr")),
+        "描述": _s(task.get("description")),
+    }
+    # 字段 ID → 中文名（2026-11-13 hunter 定）：优先本地 task_fields 对照表
+    labels = {}
+    try:
+        conn2 = backup_conn()
+        try:
+            tpl = task.get("templateId")
+            if tpl:
+                for fr in conn2.execute(
+                        "select field_name, display_name from task_fields where template_id=?",
+                        (tpl,)):
+                    if fr["display_name"]:
+                        labels[fr["field_name"]] = fr["display_name"]
+        finally:
+            conn2.close()
+    except Exception:
+        labels = {}
+
+    # 只展示能映射到中文名的字段；未映射的系统键 / 内部键（currentNodeId 等）不展示，
+    # 避免把 UUID、状态码这类内部值暴露给用户（2026-11-13 hunter 定）
+    attrs, hidden = [], 0
+    for k, v in (task.get("attribute") or {}).items():
+        sv = _s(v)
+        if not sv:
+            continue
+        lab = labels.get(k)
+        if not lab:
+            hidden += 1
+            continue
+        attrs.append({"field": k, "label": lab, "value": sv})
+    return jsonify({"ok": True, "detail": {"basic": basic, "attrs": attrs[:80]}})
+
+
 @app.route("/api/online-query", methods=["POST"])
 def api_online_query():
     """在线报表查询：命中缓存直接返回结果，否则起后台任务，前端轮询 /api/job"""
@@ -2132,7 +2525,8 @@ def api_online_query():
     types = (params.get("types") or "").strip()   # 稽核检查：错误类型（只做结果行过滤）
     base = dict(params)
     base.pop("keyword", None)
-    if tab in ("ol:progress2", "ol:debug-progress", "ol:maintain-progress", "ol:accept-progress"):
+    if tab in ("ol:progress2", "ol:debug-progress", "ol:maintain-progress", "ol:accept-progress",
+               "ol:task-query", "ol:issue-tasks"):
         # 项目进度 / 调试进度 / 保运进度 / 验收进度（2026-11-11）：关键字参与取数（决定是否按时间筛），
         # 因此 keyword 必须随 base 进缓存键，避免「按时间筛的结果」被关键字查询复用。
         base["keyword"] = keyword
