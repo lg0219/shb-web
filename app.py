@@ -14,6 +14,7 @@
 import csv
 import fcntl
 import io
+import ast
 import json
 import logging
 import os
@@ -152,6 +153,10 @@ ONLINE_TABS = {
     "ol:audit-check": "稽核检查（在线）",
     "ol:task-query": "工单查询",
     "ol:issue-tasks": "问题工单",
+    "ol:work-report": "工单管理",
+    "ol:task-map": "工单地图",
+    "ol:customer-map": "客户地图",
+    "ol:staff-map": "人员地图",
 }
 ONLINE_CACHE_TTL = 1800  # 在线报表结果缓存 30 分钟（2026-11-10 hunter 定）
 # 不缓存的在线报表：当前为空（2026-11-11 hunter 定）。
@@ -232,26 +237,33 @@ def query_trip(person, date_begin, date_end, page, page_size):
 
 
 def query_users(name, dept, page, page_size):
-    """用户（本地 users 表）：按姓名 / 部门；列 = 用户ID / 姓名 / 部门"""
+    """用户（本地 users 表）：按姓名 / 片区；列 = 用户ID / 姓名 / 片区 / 权限角色 / 状态
+
+    2026-11-16：新增片区(area) / 权限角色(roles) / 状态(state) 三列；
+    数据由 sync_users.py 从 user/getUserList 同步；dept 筛选参数改为查 area。
+    """
     where, args = [], []
     if name:
         where.append("name like ?")
         args.append(f"%{name}%")
     if dept:
-        where.append("coalesce(dept,'') like ?")
+        where.append("coalesce(area,'') like ?")
         args.append(f"%{dept}%")
     wsql = (" where " + " and ".join(where)) if where else ""
     conn = backup_conn()
     try:
         total = conn.execute(f"select count(*) c from users{wsql}", args).fetchone()["c"]
         rs = conn.execute(
-            f"select user_id, name, coalesce(dept,'') dept from users{wsql} "
+            "select user_id, name, coalesce(area,'') area, coalesce(roles,'') roles, "
+            f"coalesce(state,'') state from users{wsql} "
             f"order by name limit ? offset ?", args + [page_size, (page - 1) * page_size]).fetchall()
     finally:
         conn.close()
-    rows = [{"用户ID": r["user_id"], "姓名": r["name"] or "", "部门": r["dept"]} for r in rs]
+    rows = [{"用户ID": r["user_id"], "姓名": r["name"] or "", "片区": r["area"],
+             "权限角色": r["roles"], "状态": r["state"]} for r in rs]
     return {"ok": True, "tab": "users", "title": RESULT_TITLES["users"], "rows": rows,
-            "columns": ["用户ID", "姓名", "部门"], "total": total, "page": page, "page_size": page_size,
+            "columns": ["用户ID", "姓名", "片区", "权限角色", "状态"], "total": total,
+            "page": page, "page_size": page_size,
             "has_next": page * page_size < total, "has_prev": page > 1,
             "total_pages": max(1, (total + page_size - 1) // page_size),
             "saved_at": _meta_value("users_last_save_at")}
@@ -1672,6 +1684,24 @@ def _ua_audit(action, target, extra=None):
         logger.error("UA_AUDIT_FAIL %s", e)
 
 
+def _web_audit(action, **extra):
+    """shb-web 自身操作审计（登录/查询/导出/保存/同步），写同一 audit.log
+
+    2026-11-13 hunter 定：A 查询保存 + B 导出 + C 查询 + D 登录登出 全部记录，
+    action_source 固定 shb-web，仅 admin 可在「操作日志」看到。
+    """
+    entry = {"action": "web:" + str(action)[:40], "action_source": "shb-web",
+             "operator": request.headers.get("X-Remote-User", "") or UA_ADMIN,
+             "status": "done", "ts": datetime.now().astimezone().isoformat()}
+    for k, v in extra.items():
+        entry[k] = v[:200] if isinstance(v, str) else v
+    try:
+        with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error("WEB_AUDIT_FAIL %s", e)
+
+
 def _read_htpasswd():
     """读取 nginx 密码文件 → {user: hash}（忽略空行/注释）"""
     out = {}
@@ -2048,8 +2078,13 @@ def index():
     titles.update(SYSTEM_TITLES)
     titles.update(ONLINE_TABS)
     titles.update(backup_tab_titles())
-    return render_template("index.html", current_user=user, tabs=tabs,
-                           all_tabs=ALL_TABS, tab_titles=titles)
+    resp = make_response(render_template("index.html", current_user=user, tabs=tabs,
+                           all_tabs=ALL_TABS, tab_titles=titles))
+    # 2026-11-13：登录审计 —— 带 Authorization 且无 shb_seen cookie 视为本次登录
+    if request.headers.get("Authorization") and request.cookies.get("shb_seen") != "1":
+        _web_audit("login", agent=(request.headers.get("User-Agent") or "")[:120])
+        resp.set_cookie("shb_seen", "1", max_age=86400 * 30, path="/")
+    return resp
 
 
 # ── 查询 API ──
@@ -2067,6 +2102,8 @@ def api_search():
     if tab not in user_tabs:
         return make_response(jsonify({"ok": False, "error": "无权限访问此查询"}), 403)
 
+    _web_audit("search", tab=tab, keyword=keyword, date_begin=date_begin,
+               date_end=date_end, select=select_val, page=page)
     # ── 在线报表（ol:*）必须走 /api/online-query（后台任务 + 轮询） ──
     if tab in ONLINE_TABS:
         return jsonify({"ok": False,
@@ -2225,6 +2262,7 @@ def api_export():
 
     if tab == "records":
         return jsonify({"ok": False, "error": "该报表不支持导出"})
+    _web_audit("export", tab=tab)
     keyword = (request.args.get("keyword") or "").strip()
     date_begin = (request.args.get("date_begin") or "").strip()
     date_end = (request.args.get("date_end") or "").strip()
@@ -2526,6 +2564,26 @@ def api_online_issue_detail():
     return jsonify({"ok": True, "detail": detail})
 
 
+@app.route("/api/online/issue-fields")
+def api_online_issue_fields():
+    """问题工单批量全部字段（导出用）：ids=bizId,bizId,... → {bizId: [{label,value,urls}]}
+
+    2026-11-13 hunter 定：问题工单导出要全部字段（详情页除客户外），含图片附件链接。
+    """
+    _, tabs = get_user_permissions()
+    if "ol:issue-tasks" not in tabs:
+        return jsonify({"ok": False, "error": "无权限访问问题工单"}), 403
+    ids = [x.strip() for x in (request.args.get("ids") or "").split(",") if x.strip()][:500]
+    if not ids:
+        return jsonify({"ok": False, "error": "缺少 ids"})
+    try:
+        m = shb_online.issue_fields_batch(ids)
+    except Exception as e:
+        logger.error("ISSUE_FIELDS_FAIL err=%s", e)
+        return jsonify({"ok": False, "error": "取字段失败: %s" % e})
+    return jsonify({"ok": True, "map": m})
+
+
 @app.route("/api/online-query", methods=["POST"])
 def api_online_query():
     """在线报表查询：命中缓存直接返回结果，否则起后台任务，前端轮询 /api/job"""
@@ -2536,6 +2594,8 @@ def api_online_query():
     if tab not in user_tabs:
         return make_response(jsonify({"ok": False, "error": "无权限访问此报表"}), 403)
     params = request.get_json(silent=True) or {}
+    _web_audit("online_query", tab=tab,
+               params={k: (str(v)[:80]) for k, v in params.items() if isinstance(params, dict)})
     if not isinstance(params, dict):
         params = {}
     keyword = (params.get("keyword") or "").strip()
@@ -2609,6 +2669,7 @@ def api_save():
     tab = request.args.get("tab", "")
     if tab not in RESULT_SCRIPTS:
         return jsonify({"ok": False, "error": f"不支持的保存类型: {tab}"})
+    _web_audit("save", tab=tab, month=(request.args.get("month") or ""))
     if tab == "trip":
         month = (request.args.get("month") or datetime.now().strftime("%Y-%m")).strip()
         argv = [RESULT_SCRIPT_PY, RESULT_SCRIPTS["trip"], "--month", month, "--all-users",
@@ -2780,6 +2841,8 @@ def api_sync():
     key = request.args.get("task", "")
     if key not in SYNC_TASKS:
         return jsonify({"ok": False, "error": f"未知同步任务: {key}"})
+    _web_audit("sync", task=key, mode=(request.args.get("mode") or "incr"),
+               month=(request.args.get("month") or ""))
     for sj in RESULT_JOBS.values():
         if sj.get("tab") == "sync:" + key and sj.get("status") in ("queued", "running"):
             return jsonify({"ok": False, "error": "该任务正在运行中，请稍候"})
@@ -2830,6 +2893,7 @@ def api_synclog():
 # ── 退出登录（修复：返回 401 清 Basic Auth 缓存） ──
 @app.route("/logout")
 def logout():
+    _web_audit("logout")
     # Basic Auth 清凭据只能靠 401 + WWW-Authenticate。但浏览器弹框后会用同一 URL 重试，
     # 若停在 /shb/logout 就会无限 401。故用一次性 cookie 区分两段：
     #   ① 首次点退出（无标记）→ 401，浏览器丢弃当前凭据并弹登录框
@@ -2837,6 +2901,7 @@ def logout():
     if request.headers.get("Authorization") and request.cookies.get("shb_logging_out") == "1":
         resp = redirect("/shb/")
         resp.delete_cookie("shb_logging_out", path="/")
+        resp.delete_cookie("shb_seen", path="/")   # 2026-11-13：退出后清登录标记，下次登录重新记
         return resp
     html = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>已退出</title>
 <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;background:#f5f6fa;color:#2d3436;margin:0}
@@ -2853,6 +2918,19 @@ h1{font-size:24px;margin-bottom:8px;color:#0984e3}p{color:#636e72;font-size:14px
     resp.headers["WWW-Authenticate"] = 'Basic realm="' + _realm + '"'
     resp.set_cookie("shb_logging_out", "1", max_age=120, path="/")
     return resp
+
+
+@app.route("/api/web-audit", methods=["POST"])
+def api_web_audit():
+    """前端操作打点（如前端生成的 Excel 导出），写入操作日志（2026-11-13）"""
+    get_user_permissions()
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    action = str(body.get("action") or "unknown")[:40]
+    extra = {k: v for k, v in body.items() if k != "action"}
+    _web_audit(action, **extra)
+    return jsonify({"ok": True})
 
 
 # ── 操作日志（仅 admin）─────────────────────────────────────────
@@ -2896,6 +2974,23 @@ def api_audit():
     total = len(entries)
     start = (page - 1) * page_size
     rows = entries[start:start + page_size]
+
+    # 2026-11-13 hunter 定：target/fields 是 Python dict 的字符串形式，这里解析成结构化，
+    # 前端「目标/字段」列直接可读（工单 ID / 表单 bizId / 模板 / 改动字段）
+    def _maybe_parse(v):
+        if isinstance(v, str):
+            try:
+                return ast.literal_eval(v)
+            except Exception:
+                return None
+        return v
+    for r in rows:
+        t = _maybe_parse(r.get("target"))
+        if isinstance(t, dict):
+            r["_target"] = t
+        f = _maybe_parse(r.get("fields"))
+        if isinstance(f, dict):
+            r["_fields"] = f
 
     return jsonify({
         "ok": True,

@@ -172,6 +172,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, .item:focus-vis
 tr.clickable-row{cursor:pointer}
 tr.clickable-row:hover{background:#f2f7f7}
 </style>
+<script src="/shb/static/js/echarts.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -385,7 +386,9 @@ const TRIP_WORK_TIP = [
   '同一人同一天多单用「；」连接'
 ].join('\n');
 
-const NO_EXPORT = {records: true};
+const NO_EXPORT = {records: true, 'ol:work-report': true, 'ol:task-map': true, 'ol:customer-map': true, 'ol:staff-map': true};
+// 2026-11-16 hunter 定：这三个地图页不需要筛选框和查询按钮（切 Tab 自动查）
+const NO_FORM_TABS = {'ol:task-map': 1, 'ol:customer-map': 1, 'ol:staff-map': 1};
 const NO_SAVE = {records: true, 'debug-progress': true, progress2: true, 'weekly-plan': true,
                  'maintain-progress': true, 'accept-progress': true};
 const RESULT_FORMS = {
@@ -413,7 +416,7 @@ const RESULT_FORMS = {
   ],
   users: [
     {id:'user_name', label:'姓名', ph:'姓名'},
-    {id:'user_dept', label:'部门', ph:'部门'}
+    {id:'user_dept', label:'片区', ph:'片区'}
   ],
   workload: [
     {id:'wl_person', label:'关键字', ph:'客户编号/客户/服务人员/工单类型'},
@@ -444,7 +447,7 @@ const RESULT_FORMS = {
 };
 
 // ══ 在线报表（ol:*）—— 云端实时查询，与本地库无关（2026-11-10）══
-const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress', 'ol:maintain-progress', 'ol:accept-progress', 'ol:audit-check', 'ol:task-query', 'ol:issue-tasks'];
+const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress', 'ol:maintain-progress', 'ol:accept-progress', 'ol:audit-check', 'ol:task-query', 'ol:issue-tasks', 'ol:work-report', 'ol:task-map', 'ol:customer-map', 'ol:staff-map'];
 // 项目进度（在线）查询口径说明（显示在页面标题右侧，红色小字）
 const PROGRESS2_NOTE = '说明：关键字按客户编号或客户名称模糊匹配，不限时间；日期筛选客户档案的最后更新日期，留空表示不限；默认隐藏已填保运完毕日期的客户，勾选「显示已完成」才显示。';
 // 调试进度（在线）说明
@@ -526,11 +529,32 @@ const ONLINE_FORMS = {
      tip:'按「数据状态」多选；全部不选=不限状态。默认不含「已完成」。',
      options:['进行中','主责任部门处理','已完成'],
      default:['进行中','主责任部门处理']}
+  ],
+  // 2026-11-16 新增：工单管理（dataware 平台报表直读，图表页）
+  // 时间过滤：快捷按钮只改下面两个日期框的值，再到后端改写每块图表的 dataRanges
+  'ol:work-report': [
+    {id:'olwr_quick', label:'时间范围', type:'quickrange'},
+    {id:'olwr_begin', label:'日期从', type:'date', param:'date_begin',
+     tip:'所有图表的「统计时间」都按这个区间筛；留空=本周。'},
+    {id:'olwr_end', label:'日期至', type:'date', param:'date_end',
+     tip:'与「日期从」组成区间；留空=本周。'}
+  ],
+  // 2026-11-16 新增：三个地图页（内建报表接口，全量取数后在地图上聚合）
+  'ol:task-map': [
+    {id:'oltm_hint', label:'说明', type:'text', ph:'全区工单按地址城市聚合，点选气泡看数量', param:'_noop'}
+  ],
+  'ol:customer-map': [
+    {id:'olcm_hint', label:'说明', type:'text', ph:'客户按地址城市聚合，点选气泡看数量', param:'_noop'}
+  ],
+  'ol:staff-map': [
+    {id:'olsm_hint', label:'说明', type:'text', ph:'人员按最后定位点显示，颜色=工作状态', param:'_noop'}
   ]
 };
 
 function buildResultForm(tab) {
   const box = document.getElementById('form-row-custom');
+  // 地图类：无筛选、无查询按钮（切 Tab 自动取数）
+  if (NO_FORM_TABS[tab]) { box.style.display = 'none'; box.innerHTML = ''; return; }
   const isOl = isOnlineTab(tab);
   const cfg = RESULT_FORMS[tab] || ONLINE_FORMS[tab];
   if (!cfg) { box.style.display = 'none'; box.innerHTML = ''; return; }
@@ -550,6 +574,15 @@ function buildResultForm(tab) {
                 return '<label class="ms-item"><input type="checkbox" class="ms-opt" value="' + esc(o) + '"' + _ck + ' onchange="_msLabel(\'' + f.id + '\')">' + esc(o) + '</label>';
               }).join('')
             + '</div></div></div>';
+      return;
+    }
+    if (f.type === 'quickrange') {
+      html += '<div class="form-group"><label>' + esc(f.label) + '</label>'
+            + '<div style="display:flex;gap:6px;align-items:center">'
+            + '<button type="button" class="chip" onclick="setWorkRange(\'d7\')">最近7天</button>'
+            + '<button type="button" class="chip" onclick="setWorkRange(\'week\')">本周</button>'
+            + '<button type="button" class="chip" onclick="setWorkRange(\'month\')">本月</button>'
+            + '</div></div>';
       return;
     }
     if (f.type === 'select') {
@@ -980,8 +1013,369 @@ function _tagCell(v, cls) {
   return '<td title="' + esc(v) + '" class="col-text"><span class="tag ' + cls + '">' + esc(v) + '</span></td>';
 }
 
+// ══ 工单管理（在线，2026-11-16 hunter 定）：平台数据报表直读 + ECharts 渲染 ══
+window._wrCharts = [];
+
+function _wrIso(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function setWorkRange(kind) {
+  const n = new Date();
+  let b, e;
+  if (kind === 'd7') { b = new Date(n); b.setDate(n.getDate() - 6); e = new Date(n); }
+  else if (kind === 'month') { b = new Date(n.getFullYear(), n.getMonth(), 1); e = new Date(n.getFullYear(), n.getMonth() + 1, 0); }
+  else { b = new Date(n); b.setDate(n.getDate() - ((n.getDay() + 6) % 7)); e = new Date(b); e.setDate(b.getDate() + 6); }
+  const eb = document.getElementById('olwr_begin'), ee = document.getElementById('olwr_end');
+  if (eb) eb.value = _wrIso(b);
+  if (ee) ee.value = _wrIso(e);
+  doSearch();
+}
+
+// 数值化：普通数字原样返回；"1天2小时35分20秒" → 小时数（画图用，tooltip 显原文）
+function _wrNum(v) {
+  const s = String(v == null ? '' : v).replace(/,/g, '').trim();
+  if (!s) return 0;
+  if (/^-?[\d.]+$/.test(s)) return parseFloat(s);
+  let h = 0, m;
+  if ((m = /(-?[\d.]+)\s*天/.exec(s))) h += parseFloat(m[1]) * 24;
+  if ((m = /(-?[\d.]+)\s*小时/.exec(s))) h += parseFloat(m[1]);
+  if ((m = /(-?[\d.]+)\s*分/.exec(s))) h += parseFloat(m[1]) / 60;
+  if ((m = /(-?[\d.]+)\s*秒/.exec(s))) h += parseFloat(m[1]) / 3600;
+  return Math.round(h * 100) / 100;
+}
+
+function _wrSplit(block) {
+  let dim = null;
+  const vals = [];
+  (block.data || []).forEach(function (s) {
+    if (s.type === 'dimension') { if (!dim) dim = s; } else vals.push(s);
+  });
+  return {dim: dim, vals: vals};
+}
+
+const WR_PALETTE = ['#1890ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16', '#2f54eb'];
+
+function _wrLoadMap() {
+  if (window._wrMapReady) return Promise.resolve();
+  return fetch('/shb/static/js/china.json').then(r => r.json()).then(j => {
+    echarts.registerMap('china', j);
+    // 顺手记下各省中心点，供气泡定位（2026-11-16：地图改为可缩放 + 气泡显数）
+    const centers = {};
+    (j.features || []).forEach(f => {
+      const p = f.properties || {};
+      if (p.name && p.center && p.center.length === 2) centers[p.name] = p.center;
+    });
+    window._wrCenters = centers;
+    window._wrMapReady = true;
+  }).catch(() => {});
+}
+
+// 省份名归一化匹配（数据里可能省/市/自治区 写法略有差异）
+function _wrCenterOf(name) {
+  const c = window._wrCenters || {};
+  if (c[name]) return c[name];
+  const short = String(name || '').replace(/(省|市|自治区|特别行政区|回族|维吾尔|壮族|自治州)/g, '');
+  for (const k in c) {
+    if (k === name) return c[k];
+    if (k.replace(/(省|市|自治区|特别行政区|回族|维吾尔|壮族|自治州)/g, '') === short) return c[k];
+  }
+  return null;
+}
+
+// 工单管理导出：把 blocks 按页面顺序转成 AOA（一行 4 张卡片；大图表各占一段）
+function _wrBuildAoa(blocks) {
+  const aoa = [];
+  let smallBuf = [];
+  const flushSmall = () => {
+    while (smallBuf.length) {
+      const line = [];
+      smallBuf.splice(0, 4).forEach(c => { line.push(c.name, c.value); });
+      aoa.push(line);
+    }
+    smallBuf = [];
+    if (aoa.length && aoa[aoa.length - 1].length) aoa.push([]);
+  };
+  blocks.forEach(b => {
+    if (b.isSection) { flushSmall(); aoa.push([b.chartName]); return; }
+    const sp = _wrSplit(b);
+    if (b.chartType === 'card' || b.chartType === 'gauge') {
+      const v = (sp.vals[0] && sp.vals[0].data && sp.vals[0].data[0])
+        ? String(sp.vals[0].data[0].displayName == null ? '' : sp.vals[0].data[0].displayName) : '';
+      smallBuf.push({name: b.chartName, value: v});
+      return;
+    }
+    flushSmall();
+    aoa.push([b.chartName]);
+    const cols = (sp.dim ? [sp.dim] : []).concat(sp.vals);
+    const n = sp.dim ? ((sp.dim.data || []).length) : (((sp.vals[0] || {}).data || []).length);
+    if (!n) { aoa.push(['（暂无数据）']); aoa.push([]); return; }
+    aoa.push(cols.map(c => c.name));
+    for (let i = 0; i < n; i++) {
+      aoa.push(cols.map(c => {
+        const cell2 = c.data && c.data[i];
+        return cell2 ? String(cell2.displayName == null ? '' : cell2.displayName) : '';
+      }));
+    }
+    aoa.push([]);
+  });
+  flushSmall();
+  return aoa;
+}
+
+// ══ 地图类报表（工单地图 / 客户地图 / 人员地图，2026-11-16）══
+function renderMapReport(data) {
+  const tc = document.getElementById('table-container'), pg2 = document.getElementById('pagination');
+  if (pg2) pg2.style.display = 'none';
+  window._wrCharts.forEach(c => { try { c.dispose(); } catch (e) {} });
+  window._wrCharts = [];
+  const m = data.map || {};
+  const pts = m.points || [];
+  if (!pts.length) { tc.innerHTML = '<div class="empty">暂无带位置的记录</div>'; return; }
+  const isStaff = (currentTab === 'ol:staff-map');
+  let legendHtml = '';
+  if (isStaff && (m.legend || []).length) {
+    legendHtml = '<div style="position:absolute;right:14px;top:14px;background:#fff;border-radius:6px;padding:10px 12px;box-shadow:0 2px 10px rgba(0,0,0,.12);font-size:12px;color:#333;z-index:5;min-width:150px">'
+      + '<div style="font-weight:600;margin-bottom:6px">状态分布</div>'
+      + m.legend.map(x => '<div style="display:flex;align-items:center;gap:6px;margin:3px 0">'
+          + '<span style="width:10px;height:10px;border-radius:50%;background:' + esc(x.color) + '"></span>'
+          + '<span>' + esc(x.state) + '：' + x.count + ' 人</span></div>').join('')
+      + '<div style="margin-top:6px;color:#888">合计 ' + (m.total || 0) + ' 人</div></div>';
+  }
+  const stat = '<div style="margin-bottom:8px;font-size:12px;color:#666">'
+    + '总计 ' + (m.total || 0) + ' ' + esc(m.unit || '') + '，其中有坐标 ' + (m.located || 0)
+    + (m.skipped ? '，无坐标未上图 ' + m.skipped : '') + '</div>';
+  tc.innerHTML = '<div style="position:relative;background:#fff;border-radius:8px;padding:10px">'
+    + stat + legendHtml + '<div id="wr_map" style="width:100%;height:calc(100vh - 230px);min-height:360px"></div></div>';
+
+  _wrLoadMap().then(() => {
+    const el = document.getElementById('wr_map');
+    if (!el || typeof echarts === 'undefined') return;
+    const maxN = Math.max.apply(null, pts.map(p => p.count || 1).concat([1]));
+    const scatterData = pts.map(p => ({
+      name: p.name,
+      value: [p.lng, p.lat, p.count || 1],
+      itemStyle: {color: isStaff ? (p.color || '#595959') : '#b0005e'},
+      state: p.state || ''
+    }));
+    const opt = {
+      tooltip: {
+        trigger: 'item',
+        formatter: p => {
+          if (!p.value) return p.name;
+          return isStaff ? (p.name + '：' + (p.state || '未知状态'))
+                         : (p.name + '：' + p.value[2] + ' ' + (m.unit || ''));
+        }
+      },
+      geo: {
+        map: 'china', roam: true, zoom: 1.15, top: 8, bottom: 8, scaleLimit: {min: 0.8, max: 12},
+        itemStyle: {areaColor: '#fbfbfb', borderColor: '#d9d9d9', borderWidth: 0.8},
+        emphasis: {itemStyle: {areaColor: '#f0f0f0'}, label: {show: false}},
+        select: {disabled: true}
+      },
+      series: [{
+        type: 'scatter', coordinateSystem: 'geo',
+        symbolSize: isStaff ? 14 : (val => 12 + Math.sqrt(val[2] || 0) / Math.sqrt(maxN) * 26),
+        itemStyle: {opacity: isStaff ? 0.95 : 0.85, borderColor: '#fff', borderWidth: 1},
+        label: isStaff
+          ? {show: false}
+          : {show: true, position: 'inside', formatter: p => p.value[2], color: '#fff', fontSize: 11, fontWeight: 600},
+        emphasis: {scale: 1.15},
+        data: scatterData
+      }]
+    };
+    const ch = echarts.init(el);
+    ch.setOption(opt);
+    window._wrCharts.push(ch);
+  });
+}
+
+function renderWorkReport(data) {
+  const tc = document.getElementById('table-container');
+  const pg2 = document.getElementById('pagination');
+  if (pg2) pg2.style.display = 'none';
+  window._wrCharts.forEach(c => { try { c.dispose(); } catch (e) {} });
+  window._wrCharts = [];
+  const blocks = data.blocks || [];
+  if (!blocks.length) { tc.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+
+  // 按分组标题（isSection）切分
+  const groups = [];
+  let cur = {title: '', items: []};
+  blocks.forEach(b => {
+    if (b.isSection) { if (cur.title || cur.items.length) groups.push(cur); cur = {title: b.chartName, items: []}; }
+    else cur.items.push(b);
+  });
+  groups.push(cur);
+
+  let html = '<div style="background:#f5f7fa;padding:14px;border-radius:8px">';
+  groups.forEach(g => {
+    if (g.title) html += '<div style="display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:15px;font-weight:600;color:#2d3436">'
+      + '<span style="display:inline-block;width:3px;height:15px;background:#1890ff;border-radius:2px"></span>' + esc(g.title) + '</div>';
+    const smalls = g.items.filter(b => b.chartType === 'card' || b.chartType === 'gauge');
+    const meds = g.items.filter(b => b.chartType !== 'card' && b.chartType !== 'gauge' && b.chartSize === 'MEDIUM');
+    const bigs = g.items.filter(b => b.chartType !== 'card' && b.chartType !== 'gauge' && b.chartSize !== 'MEDIUM');
+    if (smalls.length) {
+      html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px">'
+        + smalls.map(b => {
+            const sp = _wrSplit(b);
+            const v = (sp.vals[0] && sp.vals[0].data && sp.vals[0].data[0]) ? sp.vals[0].data[0].displayName : '';
+            const nm = sp.vals[0] ? sp.vals[0].name : (b.chartName || '');
+            return '<div class="wr-card" style="background:#fff;border-radius:8px;padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,.05)">'
+              + '<div style="font-size:13px;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:4px">' + esc(b.chartName)
+              + ' <span class="qmark" style="cursor:pointer" onclick="showTip(event,this,'
+              + JSON.stringify('说明：卡片标题是售后宝报表里固定的名称（本周/本月固定叫法），实际统计区间以顶部「日期从 / 日期至」为准。').replace(/"/g,'&quot;')
+              + ')">?</span></div>'
+              + '<div style="font-size:26px;font-weight:600;color:#2d3436;line-height:1.2">' + esc(v || '—') + '</div>'
+              + '<div style="font-size:12px;color:#999;margin-top:6px">' + esc(nm) + '</div></div>';
+          }).join('') + '</div>';
+    }
+    if (meds.length) {
+      html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:12px">'
+        + meds.map(b => '<div style="background:#fff;border-radius:8px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">'
+            + '<div style="font-size:13px;font-weight:600;color:#2d3436;margin-bottom:6px">' + esc(b.chartName) + '</div>'
+            + '<div id="wrc_' + b.chartOrder + '" style="width:100%;height:280px"></div></div>').join('') + '</div>';
+    }
+    bigs.forEach(b => {
+      const isTable = b.chartType === 'table';
+      html += '<div style="background:#fff;border-radius:8px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">'
+        + '<div style="font-size:13px;font-weight:600;color:#2d3436;margin-bottom:6px">' + esc(b.chartName) + '</div>'
+        + (isTable ? '<div id="wrt_' + b.chartOrder + '"></div>'
+                   : '<div id="wrc_' + b.chartOrder + '" style="width:100%;height:320px"></div>')
+        + '</div>';
+    });
+  });
+  html += '</div>';
+  tc.innerHTML = html;
+
+  // 渲染表格
+  blocks.forEach(b => {
+    if (b.chartType === 'table') {
+      const host = document.getElementById('wrt_' + b.chartOrder);
+      if (host) host.innerHTML = _wrTableHtml(b);
+    }
+  });
+
+  const needMap = blocks.some(b => b.chartType === 'map');
+  const go = () => { blocks.forEach(b => { if (b.chartType !== 'table') _wrInitChart(b); }); };
+  if (needMap) _wrLoadMap().then(go); else go();
+}
+
+function _wrTableHtml(block) {
+  const sp = _wrSplit(block);
+  const dim = sp.dim;
+  const rows = (dim && dim.data) || [];
+  if (!rows.length) return '<div class="empty" style="padding:18px">暂无数据</div>';
+  const cols = (dim ? [dim] : []).concat(sp.vals);
+  let h = '<table><thead><tr>' + cols.map(c => '<th>' + esc(c.name) + '</th>').join('') + '</tr></thead><tbody>';
+  rows.forEach((r, i) => {
+    h += '<tr>' + cols.map(c => {
+      const cellV = (c.data && c.data[i]) ? (c.data[i].displayName == null ? '' : c.data[i].displayName) : '';
+      return '<td>' + esc(String(cellV)) + '</td>';
+    }).join('') + '</tr>';
+  });
+  return h + '</tbody></table>';
+}
+
+function _wrInitChart(block) {
+  const el = document.getElementById('wrc_' + block.chartOrder);
+  if (!el || typeof echarts === 'undefined') return;
+  const sp = _wrSplit(block);
+  const dim = sp.dim;
+  const cats = ((dim && dim.data) || []).map(x => x.displayName);
+  const legend = sp.vals.map(v => v.name);
+  const t = block.chartType;
+  let opt = null;
+
+  const base = {
+    color: WR_PALETTE,
+    tooltip: {trigger: t === 'ring-pie' ? 'item' : 'axis', confine: true},
+    legend: {top: 0, type: 'scroll', textStyle: {fontSize: 12}},
+    grid: {left: 50, right: 24, top: 42, bottom: 34, containLabel: true}
+  };
+
+  if (t === 'line' || t === 'bar' || t === 'bar-line') {
+    const series = sp.vals.map((v, i) => ({
+      name: v.name,
+      type: (t === 'bar-line' && i > 0) ? 'line' : (t === 'line' ? 'line' : 'bar'),
+      smooth: true,
+      symbolSize: 5,
+      barMaxWidth: 26,
+      data: ((v.data) || []).map(x => _wrNum(x.displayName))
+    }));
+    opt = Object.assign({}, base, {
+      xAxis: {type: 'category', data: cats, axisLabel: {fontSize: 11, interval: cats.length > 20 ? 'auto' : 0, rotate: cats.length > 14 ? 40 : 0}},
+      yAxis: {type: 'value', axisLabel: {fontSize: 11}},
+      series: series
+    });
+  } else if (t === 'bar-horizontal') {
+    const series = sp.vals.map(v => ({name: v.name, type: 'bar', barMaxWidth: 20, data: ((v.data) || []).map(x => _wrNum(x.displayName))}));
+    opt = Object.assign({}, base, {
+      xAxis: {type: 'value', axisLabel: {fontSize: 11}},
+      yAxis: {type: 'category', data: cats, axisLabel: {fontSize: 11}},
+      series: series
+    });
+  } else if (t === 'ring-pie') {
+    const v = sp.vals[0] || {data: []};
+    const dd = (v.data || []).map((x, i) => ({name: cats[i] || x.displayName, value: _wrNum(x.displayName)}));
+    opt = {
+      color: WR_PALETTE,
+      tooltip: {trigger: 'item', formatter: '{b}: {c} ({d}%)'},
+      legend: {type: 'scroll', orient: 'horizontal', top: 0, textStyle: {fontSize: 11}},
+      series: [{type: 'pie', radius: ['42%', '68%'], center: ['50%', '56%'], avoidLabelOverlap: true,
+                label: {fontSize: 10, formatter: '{b}\n{c}'}, data: dd}]
+    };
+  } else if (t === 'map') {
+    const v = sp.vals[0] || {data: []};
+    const barges = [];
+    ((v.data) || []).forEach((x, i) => {
+      const nm = cats[i] || x.displayName;
+      const cnt = _wrNum(x.displayName);
+      const ct = _wrCenterOf(nm);
+      if (ct) barges.push({name: nm, value: [ct[0], ct[1], cnt]});
+    });
+    const maxN = Math.max.apply(null, barges.map(b => b.value[2]).concat([1]));
+    opt = {
+      tooltip: {trigger: 'item', formatter: p => p.name + '：' + (p.value && p.value[2] != null ? p.value[2] : 0)},
+      geo: {
+        map: 'china', roam: true, scaleLimit: {min: 0.8, max: 12},
+        zoom: 1.15, top: 10, bottom: 10,
+        itemStyle: {areaColor: '#eaf4ff', borderColor: '#b6d9f7', borderWidth: 0.8},
+        emphasis: {itemStyle: {areaColor: '#cfe7ff'}, label: {show: false}},
+        select: {disabled: true}
+      },
+      series: [{
+        type: 'scatter', coordinateSystem: 'geo',
+        symbolSize: val => 14 + Math.sqrt(val[2] || 0) / Math.sqrt(maxN) * 26,
+        itemStyle: {color: '#1890ff', opacity: 0.82, borderColor: '#fff', borderWidth: 1},
+        label: {show: true, position: 'inside', formatter: p => p.value[2], color: '#fff', fontSize: 11, fontWeight: 600},
+        emphasis: {scale: 1.15},
+        data: barges
+      }]
+    };
+  } else if (t === 'gauge') {
+    const v = (sp.vals[0] && sp.vals[0].data && sp.vals[0].data[0]) ? _wrNum(sp.vals[0].data[0].displayName) : 0;
+    opt = {
+      series: [{type: 'gauge', min: 0, max: 100, radius: '85%',
+                axisLine: {lineStyle: {width: 10, color: [[0.6, '#ff7875'], [0.85, '#ffc069'], [1, '#52c41a']]}},
+                pointer: {width: 4}, detail: {fontSize: 16, formatter: '{value}'},
+                data: [{value: v}]}]
+    };
+  }
+  if (!opt) { el.innerHTML = '<div class="empty" style="padding:18px">暂无数据</div>'; return; }
+  const ch = echarts.init(el);
+  ch.setOption(opt);
+  window._wrCharts.push(ch);
+}
+
+window.addEventListener('resize', function () {
+  (window._wrCharts || []).forEach(c => { try { c.resize(); } catch (e) {} });
+});
+
 function renderResultData(data) {
   const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+  if (data.blocks) { renderWorkReport(data); return; }
+  if (data.map) { renderMapReport(data); return; }
   if (data.sections) { renderSections(data); pg.style.display = 'none'; return; }
   if (!data.rows || !data.rows.length) {
     if (data.persons) renderPersonBar(data.persons);   // 2026-11-13：0 条时类型条仍要显示
@@ -1178,8 +1572,16 @@ async function fetchAndRender() {
   } catch(e) { loading.style.display = 'none'; error.textContent = '网络错误：' + e.message; error.style.display = 'block'; }
 }
 
+// 2026-11-13：前端操作打点到操作日志（如前端 SheetJS 生成的 Excel 导出）
+function webAudit(action, extra) {
+  try {
+    fetch('/shb/api/web-audit', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({action: action}, extra || {}))}).catch(()=>{});
+  } catch (e) {}
+}
+
 function doExport() {
-  if (isOnlineTab(currentTab)) { doExportOnline(); return; }
+  if (isOnlineTab(currentTab)) { doExportOnline(); webAudit('export_excel', {tab: currentTab, kind: 'online'}); return; }
   const params = new URLSearchParams({ tab: currentTab });
   const isRes = !!RESULT_FORMS[currentTab] || currentTab === 'fieldmap';
   let kw = document.getElementById('keyword').value.trim();
@@ -1232,7 +1634,7 @@ function doExport() {
     if (kw) params.set('keyword', kw);
     if (d2) params.set('kw2', d2);
   }
-  if (isRes) { doExportExcel(params); return; }
+  if (isRes) { doExportExcel(params); webAudit('export_excel', {tab: currentTab, kind: 'local'}); return; }
   window.open('/shb/api/export?' + params.toString(), '_blank');
 }
 
@@ -1394,6 +1796,50 @@ async function fetchWeeklyResult(week, mode, keyword) {
   }
 }
 
+// 问题工单导出：追加「全部字段」sheet + 「附件」sheet（图片可点链接下载）
+async function _appendIssueFullSheets(wb, data, box) {
+  const ids = (data.rows || []).map(r => r.__id).filter(Boolean);
+  if (!ids.length) return;
+  if (box) { box.style.display = ''; box.textContent = '正在取全部字段（含图片）…'; }
+  const map = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50).join(',');
+    const d = await (await fetch('/shb/api/online/issue-fields?ids=' + encodeURIComponent(chunk))).json();
+    if (!d.ok) throw new Error(d.error || '取字段失败');
+    Object.assign(map, d.map || {});
+  }
+  // 列顺序按首次出现，编号固定第一列
+  const colOrder = [];
+  data.rows.forEach(r => (map[r.__id] || []).forEach(it => { if (colOrder.indexOf(it.label) < 0) colOrder.push(it.label); }));
+  const _ni = colOrder.indexOf('编号');
+  if (_ni >= 0) colOrder.splice(_ni, 1);
+  colOrder.unshift('编号');
+  const aoa = [colOrder.slice()];
+  data.rows.forEach(r => {
+    const items = map[r.__id] || [];
+    aoa.push(colOrder.map(l => { const it = items.find(x => x.label === l); return it ? it.value : ''; }));
+  });
+  const wsAll = XLSX.utils.aoa_to_sheet(aoa);
+  // 2026-11-13 16:08 hunter 定：不单独建「附件」sheet，直接在「全部字段」里给附件单元格加链接
+  // 多张图时链接指向第一张，其余文件名+链接写进单元格批注（悬停可见）
+  data.rows.forEach((r, ri) => {
+    (map[r.__id] || []).forEach(it => {
+      const urls = (it.urls || []).filter(u => u && u.url);
+      if (!urls.length) return;
+      const ci = colOrder.indexOf(it.label);
+      if (ci < 0) return;
+      const cell = wsAll[XLSX.utils.encode_cell({r: ri + 1, c: ci})];
+      if (!cell) return;
+      cell.h = urls[0].url;
+      cell.l = {Target: urls[0].url};
+      if (urls.length > 1) {
+        cell.c = [{a: 'shb-web', t: urls.map(u => (u.name || '附件') + '：' + u.url).join('\n')}];
+      }
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, wsAll, '全部字段');
+}
+
 async function doExportOnline() {
   const box = document.getElementById('job-status');
   const base = {'ol:trip':'行程单（在线）','ol:workload':'服务人员工作量（在线）',
@@ -1403,7 +1849,8 @@ async function doExportOnline() {
                 'ol:audit-check':'稽核检查（在线）',
                 'ol:task-query':'工单查询',
                 'ol:issue-tasks':'问题工单',
-                'ol:weekly-plan':'周计划（在线）'}[currentTab] || '在线报表';
+                'ol:weekly-plan':'周计划（在线）',
+                'ol:work-report':'工单管理'}[currentTab] || '在线报表';
   try {
     if (typeof XLSX === 'undefined') {
       if (box) { box.style.display = ''; box.textContent = '正在加载导出组件...'; }
@@ -1412,7 +1859,19 @@ async function doExportOnline() {
     const wb = XLSX.utils.book_new();
     let rowsHint = 0;
 
-    if (currentTab === 'ol:weekly-plan') {
+    if (currentTab === 'ol:work-report') {
+      // 2026-11-16：所见即所得导出——按页面顺序把分组/卡片/图表拼成一段段表格
+      const data = LAST_ONLINE[currentTab];
+      if (!data || !data.blocks || !data.blocks.length) {
+        if (box) { box.style.display = ''; box.textContent = '请先查询出结果再导出'; }
+        return;
+      }
+      const ws = XLSX.utils.aoa_to_sheet(_wrBuildAoa(data.blocks));
+      ws['!cols'] = [{wch: 24}, {wch: 16}, {wch: 24}, {wch: 16},
+                     {wch: 24}, {wch: 16}, {wch: 24}, {wch: 16}];
+      XLSX.utils.book_append_sheet(wb, ws, '工单管理');
+      rowsHint = data.blocks.length;
+    } else if (currentTab === 'ol:weekly-plan') {
       const week = ((document.getElementById('olw_week') || {}).value) || _isoDate(new Date());
       const kw = ((document.getElementById('olw_person') || {}).value || '').trim();
       if (box) { box.style.display = ''; box.textContent = '正在生成周计划 / 周总结…'; }
@@ -1441,9 +1900,11 @@ async function doExportOnline() {
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheetName(nm, used));
         });
       } else if (currentTab === 'ol:issue-tasks') {
-        // 问题工单：Excel 去掉「客户」列，其余列照旧（2026-11-13 hunter 定）
+        // 问题工单：列表 sheet 去掉「客户」列（2026-11-13 hunter 定）
         _appendSheet(wb, base.replace('（在线）', ''),
                      {columns: cols.filter(c => c !== '客户'), rows: data.rows});
+        // 2026-11-13 15:29 hunter 定：再加「全部字段」sheet（详情页除客户外所有字段）+「附件」sheet（图片链接）
+        await _appendIssueFullSheets(wb, data, box);
       } else {
         _appendSheet(wb, base.replace('（在线）', ''), data);
       }
@@ -1464,16 +1925,70 @@ async function doExportOnline() {
 function renderAuditTable(data) {
   const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
   if (!data.rows.length) { tc.innerHTML = '<div class="empty">暂无日志</div>'; pg.style.display = 'none'; return; }
-  const cols = ['ts','operator','domain','operation','status'];
-  const colLabels = {ts:'时间', operator:'操作人', domain:'域', operation:'操作', status:'状态'};
+  const cols = ['ts','operator','domain','operation','detail','status'];
+  const colLabels = {ts:'时间', operator:'操作人', domain:'来源', operation:'操作', detail:'目标/字段', status:'状态'};
+  // 2026-11-13 15:07 hunter：操作日志要给人看 —— 操作/状态/页签/模板全部翻译成中文
+  const _WEB_OP = {'web:search':'查询','web:online_query':'在线查询','web:export':'导出 CSV',
+                   'web:export_excel':'导出 Excel','web:save':'保存到本地库','web:sync':'同步',
+                   'web:login':'登录','web:logout':'登出'};
+  const _STATUS_CN = {done:'成功', failed:'失败', executing:'执行中', verify_failed:'回查不一致', cancelled:'已取消'};
+  const _TPL_CN = {'d5f0af73':'工程工单','aa7f2af4':'预调试工单','f6690742':'调试工单','8024da3e':'验收工单',
+                   '1d0a8205':'保运工单','4993cd38':'售后工单','c33632ed':'日常工单','25daa54e':'改造工单',
+                   'd8c34f70':'问题工单'};
+  function _opCn(row) {
+    const a = row.action || '', op = (row.operation || '');
+    if (_WEB_OP[a]) return _WEB_OP[a];
+    if (a === 'write') {
+      const d = row.domain || '', o = op.toLowerCase();
+      if (d === 'task') {
+        if (o.includes('create')) return '创建工单';
+        if (o.includes('alloc')) return '分配工单';
+        if (o.includes('update')) return '更新工单';
+        return '工单操作';
+      }
+      if (d === 'paas') return '表单操作';
+      if (d === 'customer') return '客户操作';
+      return (d ? d + ' ' : '') + (op || '写操作');
+    }
+    return a || op || '';
+  }
+  // 2026-11-13：把后端解析好的 _target/_fields 渲染成可读摘要（工单 ID / 表单 bizId / 改动字段）
+  function _auditDetail(row) {
+    const parts = [];
+    if (row.tab) parts.push('页签 ' + (tabTitles[row.tab] || row.tab));
+    const t = row._target || {};
+    if (t.task_id) parts.push('工单 ' + String(t.task_id).slice(0, 14));
+    if (t.bizId) parts.push('表单 ' + String(t.bizId).slice(0, 14));
+    if (t.template_id) parts.push('模板 ' + (_TPL_CN[String(t.template_id).slice(0, 8)] || String(t.template_id).slice(0, 8)));
+    if (t.customer) parts.push('客户 ' + String(t.customer).slice(0, 12));
+    const f = row._fields;
+    if (f && typeof f === 'object') {
+      const ks = Object.keys(f);
+      const items = ks.slice(0, 3).map(k => {
+        const x = f[k] || {};
+        let v = x.value !== undefined ? x.value : (x.label || '');
+        if (typeof v === 'object') v = JSON.stringify(v);
+        return (x.display_name || k) + '=' + String(v).slice(0, 24);
+      });
+      if (items.length) parts.push(items.join('；') + (ks.length > 3 ? ' …等' + ks.length + '项' : ''));
+    }
+    if (!parts.length && row.target) parts.push(String(row.target).slice(0, 40));
+    return parts.join(' ｜ ');
+  }
+  // 2026-11-13：shb-web 自身操作（action_source=shb-web）没有 domain/operation，回退显示
+  const _cell = (r, c) => (r[c] != null && r[c] !== '') ? r[c]
+    : (c === 'domain' ? (r.action_source || '') : (c === 'operation' ? (r.action || '') : ''));
   let html = '<table><thead><tr>' + cols.map(c => '<th>'+colLabels[c]+'</th>').join('') + '</tr></thead><tbody>';
   data.rows.forEach(row => {
     html += '<tr>' + cols.map(c => {
-      let v = row[c] || '';
+      let v = (c === 'detail') ? _auditDetail(row) : (_cell(row, c) || '');
       if (c === 'ts') v = v.replace('T',' ').substring(0,19);
+      if (c === 'operation') v = _opCn(row) || v;
       if (c === 'status') {
-        const color = v==='failed'?'#d63031':v==='verify_failed'?'#e17055':v==='done'?'#00b894':'#636e72';
-        v = '<span style="color:'+color+';font-weight:600">'+v+'</span>';
+        const _raw = String(v);
+        const _cn = _STATUS_CN[_raw] || _raw;
+        const color = _raw==='failed'?'#d63031':_raw==='verify_failed'?'#e17055':_raw==='done'?'#00b894':'#636e72';
+        v = '<span style="color:'+color+';font-weight:600">'+_cn+'</span>';
       }
       return '<td title="'+JSON.stringify(row).substring(0,100)+'" class="col-text">'+v+'</td>';
     }).join('') + '</tr>';

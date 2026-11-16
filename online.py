@@ -155,6 +155,10 @@ TAB_TITLES = {
     "ol:audit-check": "稽核检查（在线）",
     "ol:task-query": "工单查询",
     "ol:issue-tasks": "问题工单",
+    "ol:work-report": "工单管理",
+    "ol:task-map": "工单地图",
+    "ol:customer-map": "客户地图",
+    "ol:staff-map": "人员地图",
 }
 
 
@@ -192,7 +196,9 @@ def load_auth():
 def http_get(path, params):
     """直连售后宝 HTTP 接口（token 请求头，同 sync_records.py）"""
     domain, token = load_auth()
-    url = "https://%s%s?%s" % (domain, path, urllib.parse.urlencode(params))
+    url = "https://%s%s" % (domain, path)
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={
         "token": token,
         "shbversion": "3",
@@ -2077,6 +2083,80 @@ def _issue_value(raw, ftype):
     return str(v), urls
 
 
+def issue_fields_batch(biz_ids):
+    """批量取问题工单全部字段（导出用）→ {bizId: [{label,value,urls}]}
+
+    2026-11-13 hunter 定：问题工单导出要「全部字段」（详情页除客户外），含图片附件链接。
+    系统字段走 search 缓存，表单字段走 batch-get（50/批），字段名用模板中文名。
+    """
+    labels, types = _issue_labels()
+    rows_map = _issue_rows_by_id()
+    ids = [b for b in (biz_ids or []) if b]
+    out = {}
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        try:
+            d = cli(["paas", "form", "batch-get",
+                     "--data", json.dumps({"bizIds": chunk}, ensure_ascii=False),
+                     "-o", "raw"], timeout=90)
+        except Exception:
+            d = {}
+        for bid in chunk:
+            rec = (d or {}).get(bid) or {}
+            sr = rows_map.get(bid) or {}
+            items, seen = [], set()
+
+            def add(label, value, urls=None):
+                if value in (None, "", [], {}):
+                    return
+                if label in seen:
+                    return
+                seen.add(label)
+                items.append({"label": label, "value": str(value), "urls": urls or []})
+
+            # 系统字段（与详情页一致）
+            add("编号", sr.get("serialNumber"))
+            add("数据状态", sr.get("flowStatus"))
+            add("当前节点", sr.get("currentNode"))
+            add("创建时间", sr.get("createTime"))
+            add("创建人", sr.get("createUser"))
+
+            vals = {}
+            for it in rec.get("paasFormValueList") or []:
+                fn = it.get("fieldName")
+                if fn:
+                    vals[fn] = it
+            order = [f for _sec, fs in ISSUE_DETAIL_SECTIONS for f in fs]
+            order += [f for f in vals if f not in order]
+            for f in order:
+                if f == ISSUE_CUSTOMER_FIELD:      # 导出不要客户（hunter 定）
+                    continue
+                if f not in labels:                # 无中文名的遗留字段跳过
+                    continue
+                it = vals.get(f)
+                if not it:
+                    continue
+                lab = labels[f]
+                ftype = types.get(f) or it.get("formType") or ""
+                if ftype == "subForm" or it.get("isSubForm") == 1:
+                    rows_out = []
+                    for sub in it.get("subFormContentVOList") or []:
+                        parts = []
+                        for vo in (sub or {}).get("subFormValueVOList") or []:
+                            k = vo.get("fieldName")
+                            txt, _ = _issue_value(vo.get("value"), types.get(k) or "")
+                            if txt:
+                                parts.append("%s：%s" % (labels.get(k, k), txt))
+                        if parts:
+                            rows_out.append("；".join(parts))
+                    add(lab, "\n".join(rows_out))
+                else:
+                    txt, urls = _issue_value(it.get("value"), ftype)
+                    add(lab, txt, urls)
+            out[bid] = items
+    return out
+
+
 def issue_detail(biz_id):
     """问题工单详情：paas form get → 按中文名分区的完整信息"""
     labels, types = _issue_labels()
@@ -2148,7 +2228,249 @@ def issue_detail(biz_id):
             "sections": sections}
 
 
+# ── 报表 9：工单管理（dataware 平台报表直读，2026-11-16 hunter 批准）──
+# 数据源 = 售后宝「管理报表 → 人效考核 → 工单管理」的图表配置；
+# 每块直接 POST 到 queryCustomChartData，平台已聚合好，不需自己遍历工单算。
+DW_WORK_REPORT_ID = "2000000000000073092"
+DW_CFG_TTL = 3600
+_DW_CFG = {"ts": 0.0, "data": None}
+
+
+def http_post(path, body):
+    """直连售后宝 POST 接口（token 头，同 http_get）"""
+    domain, token = load_auth()
+    req = urllib.request.Request(
+        "https://%s%s" % (domain, path),
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={"token": token, "shbversion": "3", "shb-language": "zh",
+                 "timezone": "Asia/Shanghai", "content-type": "application/json",
+                 "accept": "application/json, text/plain, */*",
+                 "user-agent": "shb-web-online/1.0"})
+    last = None
+    for _ in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1)
+    raise RuntimeError("售后宝接口请求失败：%s" % last)
+
+
+def dw_config(report_id=None):
+    """工单管理报表配置（1 小时缓存，约 113KB）"""
+    rid = report_id or DW_WORK_REPORT_ID
+    now = time.time()
+    if _DW_CFG["data"] and now - _DW_CFG["ts"] < DW_CFG_TTL:
+        return _DW_CFG["data"]
+    d = http_get("/api/dataware/outside/custom/report/V2/getConfigV2/%s" % rid, {})
+    data = d.get("data") or {}
+    if data:
+        _DW_CFG.update(ts=now, data=data)
+    return data
+
+
+def _dw_ms(day, end=False):
+    """'YYYY-MM-DD' → 毫秒时间戳（本地时区，end=True 取当日 23:59:59）"""
+    dt = datetime.strptime(day, "%Y-%m-%d")
+    if end:
+        dt = dt.replace(hour=23, minute=59, second=59)
+    return int(dt.timestamp() * 1000)
+
+
+def q_work_report(params, progress, deadline):
+    """工单管理（在线）：直读平台数据报表的图表结果
+
+    2026-11-16 hunter 定：
+      · 页面 = 管理报表/人效考核/工单管理（报表 id 见 DW_WORK_REPORT_ID）
+      · 20 个块中 3 个 splitBar 是分组标题（isSection），17 个是真图表
+      · 过滤：把每块 dataRanges 里「统计时间(vDate/date_value)」的 dynamicValue 清空，
+        换成用户所选区间的起止毫秒 → 支持自定义时间
+    """
+    db = (params.get("date_begin") or "").strip()
+    de = (params.get("date_end") or "").strip()
+    if db or de:
+        b, e = d_range(db, de)
+    else:
+        b, e = week_range_now()          # 默认本周（与平台报表一致）
+    ms_b, ms_e = _dw_ms(b[:10]), _dw_ms(e[:10], end=True)
+
+    cfg = dw_config()
+    blocks = cfg.get("pageChartConfigList") or []
+    if not blocks:
+        raise RuntimeError("取不到「工单管理」报表配置，请先在身份管理里重新授权")
+
+    # 改写时间条件（只改「统计时间」维度）
+    for blk in blocks:
+        for r in (blk.get("dataRanges") or []):
+            dim = r.get("dimension") or {}
+            if dim.get("dataOrigin") == "vDate" or dim.get("dataField") == "date_value":
+                r["dynamicValue"] = None
+                r["values"] = [str(ms_b), str(ms_e)]
+
+    def _is_section(blk):
+        return (blk.get("chartType") == "splitBar"
+                and not (blk.get("indexs") or blk.get("dimensions")))
+
+    def _one(blk):
+        d = http_post("/api/dataware/outside/custom/report/V2/queryCustomChartData", blk)
+        return d.get("data") or []
+
+    todo = [x for x in blocks if not _is_section(x)]
+    got, done = {}, 0
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_one, blk): blk for blk in todo}
+        for fut in as_completed(futs):
+            _check(deadline, "取工单管理图表")
+            blk = futs[fut]
+            try:
+                got[blk.get("chartId")] = fut.result()
+            except Exception:            # 单块失败不拖垮整页
+                got[blk.get("chartId")] = []
+            done += 1
+            if progress:
+                progress("已取图表 %d/%d" % (done, len(todo)))
+
+    out = []
+    for blk in blocks:
+        sec = _is_section(blk)
+        out.append({
+            "chartName": blk.get("chartName") or "",
+            "chartType": blk.get("chartType") or "",
+            "chartSize": blk.get("chartSize") or "",
+            "chartOrder": blk.get("chartOrder") or 0,
+            "isSection": sec,
+            "data": [] if sec else got.get(blk.get("chartId"), []),
+        })
+    out.sort(key=lambda x: x["chartOrder"])
+    return {"ok": True, "tab": "ol:work-report", "title": TAB_TITLES["ol:work-report"],
+            "blocks": out, "rows": [], "columns": [], "total": len(out),
+            "page": 1, "page_size": len(out), "has_next": False, "has_prev": False,
+            "total_pages": 1, "online": True, "range": [b[:10], e[:10]]}
+
+
+# ── 地图类报表（2026-11-16 hunter 定）────────────────────────────────
+# 数据源均为内建报表接口 /api/report/outside/stats/*（第二轮抓包定位）
+_STATE_COLOR = {"工作中": "rgb(110, 207, 64)", "非常忙碌": "rgb(255, 89, 0)",
+                "休假中": "rgb(255, 174, 0)"}
+
+
+def _place_name(city, prov, dist=None):
+    """地点名归一化：city 为「市辖区/县」等非具体地名时，回退用省份（+区县）
+
+    2026-11-16：实测天津等地地址的 city 字段是「市辖区」，
+    直接拿来聚合会把不同省份的点全部混成一个，故做此回退。
+    """
+    city = (city or "").strip()
+    prov = (prov or "").strip()
+    dist = (dist or "").strip()
+    bad = ("市辖区", "县", "省直辖县级行政区划", "自治区直辖县级行政区划", "市辖县")
+    if not city or city in bad:
+        base = prov or dist
+        if dist and base and dist != base:
+            return base + "·" + dist
+        return base
+    return city
+
+
+def _map_group(items, name_of, lng_of, lat_of):
+    """按地点名聚合计点：同名取首点坐标，count 累加"""
+    agg = {}
+    skipped = 0
+    for it in items or []:
+        nm = (name_of(it) or "").strip()
+        lng, lat = lng_of(it), lat_of(it)
+        if not nm or lng in (None, "", 0) or lat in (None, "", 0):
+            skipped += 1
+            continue
+        g = agg.get(nm) or {"name": nm, "lng": float(lng), "lat": float(lat), "count": 0}
+        g["count"] += 1
+        agg[nm] = g
+    return sorted(agg.values(), key=lambda x: -x["count"]), skipped
+
+
+def q_task_map(params, progress, deadline):
+    """工单地图：按地址城市聚合工单数（内建报表 plan/getTaskMapList）"""
+    d = http_post("/api/report/outside/stats/plan/getTaskMapList",
+                  {"page": 1, "pageSize": 2000})
+    rows = d.get("list") or []
+    pts, skipped = _map_group(
+        rows,
+        lambda x: _place_name((x.get("customerAddress") or {}).get("city"),
+                              (x.get("customerAddress") or {}).get("province"),
+                              (x.get("customerAddress") or {}).get("dist")),
+        lambda x: (x.get("customerAddress") or {}).get("longitude"),
+        lambda x: (x.get("customerAddress") or {}).get("latitude"))
+    return {"ok": True, "tab": "ol:task-map", "title": TAB_TITLES["ol:task-map"],
+            "map": {"points": pts, "unit": "单", "total": len(rows),
+                    "located": len(rows) - skipped, "skipped": skipped},
+            "rows": [], "columns": [], "total": len(pts), "online": True,
+            "page": 1, "page_size": len(pts), "has_next": False, "has_prev": False,
+            "total_pages": 1}
+
+
+def q_customer_map(params, progress, deadline):
+    """客户地图：按客户地址城市聚合客户数（内建报表 customer/list）"""
+    rows = http_post("/api/report/outside/stats/customer/list", {})
+    if isinstance(rows, dict):
+        rows = rows.get("data") or []
+    pts, skipped = _map_group(
+        rows,
+        lambda x: _place_name((x.get("customerAddress") or {}).get("adCity"),
+                              (x.get("customerAddress") or {}).get("adProvince"),
+                              (x.get("customerAddress") or {}).get("adDist")),
+        lambda x: (x.get("customerAddress") or {}).get("adLongitude"),
+        lambda x: (x.get("customerAddress") or {}).get("adLatitude"))
+    return {"ok": True, "tab": "ol:customer-map", "title": TAB_TITLES["ol:customer-map"],
+            "map": {"points": pts, "unit": "客户", "total": len(rows),
+                    "located": len(rows) - skipped, "skipped": skipped},
+            "rows": [], "columns": [], "total": len(pts), "online": True,
+            "page": 1, "page_size": len(pts), "has_next": False, "has_prev": False,
+            "total_pages": 1}
+
+
+def q_staff_map(params, progress, deadline):
+    """人员地图：一人一点 + 工作状态（内建报表 teamUser + stats/config）"""
+    arr = http_post("/api/dataware/outside/user/staff/teamUser", {})
+    if isinstance(arr, dict):
+        arr = arr.get("data") or []
+    colors = dict(_STATE_COLOR)
+    try:
+        cfgd = http_get("/api/report/outside/stats/config", {})
+        m = (cfgd or {}).get("stateColorMap") or {}
+        if m:
+            colors.update(m)
+    except Exception:
+        pass
+    pts, skipped = [], 0
+    stat = {}
+    for u in arr or []:
+        st = (u.get("state") or "").strip() or "未设置状态"
+        stat[st] = stat.get(st, 0) + 1
+        lng, lat = u.get("longitude"), u.get("latitude")
+        if lng in (None, "", 0) or lat in (None, "", 0):
+            skipped += 1
+            continue
+        pts.append({"name": (u.get("displayName") or "").strip(),
+                    "lng": float(lng), "lat": float(lat),
+                    "count": 1, "state": st,
+                    "color": colors.get(st, "#595959")})
+    legend = [{"state": k, "count": v, "color": colors.get(k, "#595959")}
+              for k, v in sorted(stat.items(), key=lambda kv: -kv[1])]
+    return {"ok": True, "tab": "ol:staff-map", "title": TAB_TITLES["ol:staff-map"],
+            "map": {"points": pts, "unit": "人", "total": len(arr or []),
+                    "located": len(pts), "skipped": skipped, "legend": legend},
+            "rows": [], "columns": [], "total": len(pts), "online": True,
+            "page": 1, "page_size": len(pts), "has_next": False, "has_prev": False,
+            "total_pages": 1}
+
+
 HANDLERS = {
+    "ol:task-map": q_task_map,
+    "ol:customer-map": q_customer_map,
+    "ol:staff-map": q_staff_map,
+    "ol:work-report": q_work_report,
     "ol:trip": q_trip,
     "ol:weekly-plan": q_weekly,
     "ol:progress2": q_progress2,
