@@ -43,20 +43,36 @@ QUERY_BUDGET = 180         # 秒：单次在线查询总预算（行程单默认
 DEBUG_TASK_TID = "f6690742-8462-42c9-b7dd-fe36ea405eb6"   # 调试工单类型
 MAINT_TASK_TID = "1d0a8205-e753-43b2-b811-9c970c12dab5"  # 保运工单类型
 # 保运「服务内容」11 项（第 11 项为手填文本），列名与售后宝字段显示名一致（2026-11-11 核实）
+# 2026-11-20 hunter 定：列名改为「数字.内容简称」（导出/表头同用）
 MAINT_ITEMS = [
-    ("field_Fdlx52zIjIrKAeLs", "1、检查控制系统是否显示正常"),
-    ("field_dsSkKVBWER6TrzeN", "2、检查各阀门开关、控制是否正常"),
-    ("field_7mCCgFC0OzxT5r2U", "3、排除储罐内液氮"),
-    ("field_WJSDwBqVK3v2XAm6", "4、储罐进LNG"),
-    ("field_hqI0u84UGX3uqeER", "5、管路漏点处理、冷紧"),
-    ("field_KkHmn7g8H5bz7LPg", "6、培训卸车操作"),
-    ("field_imFTbYT1HoJhW53J", "7、培训加液操作"),
-    ("field_S0NlIfaLX4pQ1PHa", "8、培训站控系统"),
-    ("field_U88OKT4q1ZMaNYHO", "9、培训收费系统"),
-    ("field_54aaJjrmq6acfKlM", "10、安全培训"),
-    ("field_jTtLugqBo0ndoXAR", "11、其他"),
+    ("field_Fdlx52zIjIrKAeLs", "1.测控系统"),
+    ("field_dsSkKVBWER6TrzeN", "2.控制开关"),
+    ("field_7mCCgFC0OzxT5r2U", "3.排除液氮"),
+    ("field_WJSDwBqVK3v2XAm6", "4.进LNG"),
+    ("field_hqI0u84UGX3uqeER", "5.漏点"),
+    ("field_KkHmn7g8H5bz7LPg", "6.卸车培训"),
+    ("field_imFTbYT1HoJhW53J", "7.加液培训"),
+    ("field_S0NlIfaLX4pQ1PHa", "8.站控培训"),
+    ("field_U88OKT4q1ZMaNYHO", "9.收费培训"),
+    ("field_54aaJjrmq6acfKlM", "10.安全培训"),
+    ("field_jTtLugqBo0ndoXAR", "11.其他"),
 ]
-MAINT_COLUMNS = ["项目编号", "项目名称", "开始时间", "完成时间"] + [d for _f, d in MAINT_ITEMS]
+MAINT_COLUMNS = ["人员", "项目编号", "项目名称", "开始时间", "完成时间"] + [d for _f, d in MAINT_ITEMS]
+MAINT_ORDER = {d: i for i, (_f, d) in enumerate(MAINT_ITEMS)}
+# 2026-11-20 hunter 定：列名用「数字.简称」（表头好看），但「检查内容」列要显示数据源真实名称
+MAINT_FULL = {
+    "1.测控系统": "1、检查控制系统是否显示正常",
+    "2.控制开关": "2、检查各阀门开关、控制是否正常",
+    "3.排除液氮": "3、排除储罐内液氮",
+    "4.进LNG": "4、储罐进LNG",
+    "5.漏点": "5、管路漏点处理、冷紧",
+    "6.卸车培训": "6、培训卸车操作",
+    "7.加液培训": "7、培训加液操作",
+    "8.站控培训": "8、培训站控系统",
+    "9.收费培训": "9、培训收费系统",
+    "10.安全培训": "10、安全培训",
+    "11.其他": "11、其他",
+}
 
 # 验收工单（2026-11-11 新增「验收进度」报表）
 ACCEPT_TASK_TID = "8024da3e-6881-48d5-ac58-9d0d4ee1da0a"
@@ -149,9 +165,14 @@ TAB_TITLES = {
     "ol:weekly-plan": "周计划（在线）",
     "ol:progress2": "项目进度（在线）",
     "ol:workload": "服务人员工作量（在线）",
-    "ol:debug-progress": "调试进度（在线）",
+    "ol:predebug-progress": "预调试进度（在线）",
+    "ol:predebug-progress2": "预调试进度-2",
+    "ol:debug-summary": "调试进度（在线）",
+    "ol:debug-progress": "调试进度-2",
     "ol:maintain-progress": "保运进度（在线）",
+    "ol:maint-progress2": "保运进度-2",
     "ol:accept-progress": "验收进度（在线）",
+    "ol:accept-progress2": "验收进度-2",
     "ol:audit-check": "稽核检查（在线）",
     "ol:task-query": "工单查询",
     "ol:issue-tasks": "问题工单",
@@ -1182,6 +1203,313 @@ def q_debug(params, progress, deadline):
     return _resp("ol:debug-progress", out, DEBUG_COLUMNS)
 
 
+# ── 报表 5A：调试进度（在线）汇总 — 2026-11-20 hunter 新增 ────────
+# 口径：一个项目一行（同项目多单取「调试日期最新」的一单）；
+#      调试内容按「数字.简称」排成列，做了打 ✓、没做留空。
+DEBUG_SUMMARY_ITEMS = [
+    ("清点货物", "1.清点"),
+    ("卸车拉断阀、软管安装", "2.卸车阀管"),
+    ("潜液泵安装", "3.潜液泵"),
+    ("泵池入口处过滤网清理", "4.过滤网清理"),
+    ("储罐液氮预冷、进液氮", "5.液氮预冷"),
+    ("吹扫管路", "6.吹扫管路"),
+    ("管路漏点测试-安全阀、冷紧", "7.漏点-安全阀"),
+    ("管路漏点测试-管路法兰、冷紧", "8.漏点-法兰"),
+    ("管路漏点测试-管路阀门、冷紧", "9.漏点-阀门"),
+    ("柱塞泵打压测试", "10.柱塞泵打压"),
+    ("加液机安装软管", "11.加液软管"),
+    ("加液机流量计安装", "12.流量计"),
+    ("加液枪安装", "13.加液枪"),
+    ("加液机打循环测试", "14.循环测试"),
+    ("潜液泵转向测试", "15.转向测试"),
+]
+DEBUG_ITEM_COLS = [s for _f, s in DEBUG_SUMMARY_ITEMS]
+DEBUG_SUMMARY_COLUMNS = ["序号", "项目编码", "客户名称", "调试人员"] + DEBUG_ITEM_COLS + ["调试日期"]
+DEBUG_ITEM_ORDER = {s: i for i, (_f, s) in enumerate(DEBUG_SUMMARY_ITEMS)}
+
+
+def q_debug_summary(params, progress, deadline):
+    """调试进度（在线）汇总：一个项目一行，调试内容列为简写，做过的打 ✓
+
+    同一项目有多单时，取「调试日期最新」的一单（hunter 2026-11-20 定）。
+    """
+    base = q_debug(params, progress, deadline)
+    src = base.get("rows") or []
+    groups = {}
+    for r in src:
+        key = (r.get("项目编码") or "").strip() or (r.get("客户名称") or "").strip()
+        if not key:
+            continue
+        groups.setdefault(key, {}).setdefault(r.get("__tid") or key, []).append(r)
+
+    out = []
+    for _key, tmap in groups.items():
+        def _maxday(rs):
+            return max([str(x.get("调试日期") or "") for x in rs] or [""])
+        tid = max(tmap, key=lambda k: _maxday(tmap[k]))
+        rs = tmap[tid]
+        persons = []
+        for x in rs:
+            for n in str(x.get("调试人员") or "").split("、"):
+                n = n.strip()
+                if n and n not in persons:
+                    persons.append(n)
+        done = {str(x.get("调试内容") or "").strip() for x in rs}
+        row = {"项目编码": rs[0].get("项目编码") or "",
+               "客户名称": rs[0].get("客户名称") or "",
+               "调试人员": "、".join(persons),
+               "调试日期": _maxday(rs)}
+        for col, (full, _short) in zip(DEBUG_ITEM_COLS, DEBUG_SUMMARY_ITEMS):
+            row[col] = "✓" if full in done else ""
+        out.append(row)
+
+    out.sort(key=lambda r: (r["项目编码"] or "", r["客户名称"] or ""))
+    final = []
+    for i, r in enumerate(out, 1):
+        item = {"序号": i}
+        for c in DEBUG_SUMMARY_COLUMNS[1:]:
+            item[c] = r.get(c, "")
+        final.append(item)
+    return _resp("ol:debug-summary", final, DEBUG_SUMMARY_COLUMNS)
+
+
+# ── 报表 5B：预调试进度（在线）— 2026-11-20 hunter 新增 ──────
+# 数据源：预调试工单（独立工单类型，与调试工单平级）
+# 行粒度：一人一行（责任人 + 协作人）；同一工单多行内容重复（hunter 定）
+# 12 个预调项各占一列，选中打 ✓、未选留空；列名“序号+简称”，全称放前端气泡
+PRE_TASK_TID = "aa7f2af4-8b83-4bd4-ac48-b92fce5cca6e"   # 预调试工单类型
+PRE_ITEMS_FIELD = "field_zdzGw3gizaivO9bE"               # 预调内容（多选）
+PRE_DATE_FIELD = "field_sdTtQsgyz6RSybi9"                # 检查日期
+PRE_SERIAL_FIELD = "field_ZkNhMQeSI5cRoC1W"              # 客户编号
+# 选项全称 → 列名简称（顺序与后台选项顺序一致）
+PRE_ITEMS = [
+    ("检查全站线路连接", "线路"),
+    ("安装UPS电源", "UPS"),
+    ("设备上电并检查触摸屏显示是否正常", "触摸屏"),
+    ("收费电脑安装", "收费电脑"),
+    ("站控系统安装、PLC程序安装", "站控PLC"),
+    ("检查急停按钮", "急停"),
+    ("检查燃气探测器", "燃气探测"),
+    ("检查加液机通讯", "加液机"),
+    ("空压机上电、气路吹扫并检查漏点", "空压机"),
+    ("控制柜通讯是否正常", "控制柜"),
+    ("气动阀电动测试", "气动阀"),
+    ("急停按钮、燃气报警等系统连锁测试", "连锁测试"),
+]
+PRE_BASE = ["序号", "人员", "角色", "项目编码", "客户名称",
+            "接单日期", "计划开始日期", "开始日期", "完成日期"]
+PRE_ITEM_COLS = ["%d %s" % (i, s) for i, (_f, s) in enumerate(PRE_ITEMS, 1)]
+PRE_COLUMNS = PRE_BASE + PRE_ITEM_COLS
+# 预调试进度-2（长表）：12 项合并成一列「检查内容」
+PRE2_COLUMNS = PRE_BASE + ["检查内容"]
+PRE_ITEM_ORDER = {f: i for i, (f, _s) in enumerate(PRE_ITEMS)}
+
+
+def _pre_day(v):
+    """工单时间（毫秒/ISO/朴素串）→ YYYY-MM-DD；空值返回 """
+    if v in (None, "", 0, "0"):
+        return ""
+    dt = ts_any(v)
+    if dt:
+        return dt.strftime("%Y-%m-%d")
+    return str(v)[:10]
+
+
+def _pre_persons(t, init):
+    """责任人（工单负责人）+ 协作人（协同人），带角色标识"""
+    task = (init or {}).get("task") or {}
+    owner = ((task.get("executor") or {}).get("displayName")
+             or t.get("executorName")
+             or (t.get("executorUser") or {}).get("displayName") or "").strip()
+    out = [(owner, "责任人")] if owner else []
+    for u in (task.get("synergies") or []):
+        n = ((u or {}).get("displayName") or "").strip()
+        if n and n != owner:
+            out.append((n, "协作人"))
+    return out
+
+
+def _pre_attr(init, tmp):
+    """回执字段合并：已提交（read/update/task）打底，节点暂存覆盖"""
+    merged = {}
+    for src in ((init or {}).get("receiptTaskForRead") or {},
+                (init or {}).get("receiptTaskForUpdate") or {},
+                (init or {}).get("task") or {}):
+        for k, v in (src.get("attribute") or {}).items():
+            if v not in (None, "", [], {}):
+                merged[k] = v
+    for k, v in (tmp or {}).items():
+        if v not in (None, "", [], {}):
+            merged[k] = v
+    return merged
+
+
+def _pre_selected(v):
+    """预调内容值 → 选项全称集合（兼容字符串数组 / 对象数组 / 逗号串）"""
+    out = set()
+    if isinstance(v, list):
+        for x in v:
+            if isinstance(x, dict):
+                x = (x.get("label") or x.get("value")
+                     or x.get("displayName") or x.get("name") or "")
+            s = str(x or "").strip()
+            if s:
+                out.add(s)
+    elif isinstance(v, str):
+        for x in v.replace("，", ",").replace("、", ",").split(","):
+            s = x.strip()
+            if s:
+                out.add(s)
+    return out
+
+
+def _pre_collect(params, progress, deadline):
+    """预调试共用取数（宽表/长表共用）：返回记录列表
+
+    每条 = {"serial","cname","dates":{4 个日期},"sel":已选项全称集合,"persons":[(姓名,角色)]}
+    过滤：未派单（无负责人）的工单丢弃；时间按回执「检查日期」，口径同调试进度。
+    """
+    keyword = (params.get("keyword") or "").strip()
+    b, e = rng(params, "week")
+    b_day, e_day = b[:10], e[:10]
+    _anchor = ts_any(b_day) or datetime.now()
+    if keyword:
+        win_b, win_e, date_filter = None, None, False
+    else:
+        win_b = (_anchor - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00")
+        win_e, date_filter = e, True
+    tasks = search_tasks(win_b, win_e, template_id=PRE_TASK_TID,
+                         deadline=deadline, progress=progress)
+
+    def _has_owner(t):
+        return bool((t.get("executorName") or "").strip()
+                    or ((t.get("executorUser") or {}).get("displayName") or "").strip()
+                    or t.get("executorId"))
+
+    tasks = [t for t in tasks if _has_owner(t)]
+
+    dmap, tmap = {}, {}
+    if tasks:
+        total, done = len(tasks), 0
+
+        def _one(t):
+            tid = t.get("id")
+            try:
+                init = task_detail(tid)
+            except Exception:
+                init = {}
+            _task = init.get("task") or {}
+            nid = ((_task.get("attribute") or {}).get("currentNodeId")
+                   or (init.get("receiptTaskForUpdate") or {}).get("currentNodeId"))
+            tmp = {}
+            if nid and (t.get("state") not in ("finished", "closed", "costed", "offed")):
+                try:
+                    tmp = node_temp_storage(tid, nid)
+                except Exception:
+                    tmp = {}
+            return tid, init, tmp
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+            futs = [ex.submit(_one, t) for t in tasks]
+            for fut in as_completed(futs):
+                _check(deadline, "取工单详情/暂存")
+                tid, init, tmp = fut.result()
+                dmap[tid] = init
+                tmap[tid] = tmp
+                done += 1
+                if progress:
+                    progress("已取 %d/%d 单" % (done, total))
+
+    recs = []
+    for t in tasks:
+        init = dmap.get(t.get("id")) or {}
+        task = init.get("task") or {}
+        attr = _pre_attr(init, tmap.get(t.get("id")) or {})
+        cust = task.get("customer") or {}
+        serial = (cust.get("serialNumber") or attr.get(PRE_SERIAL_FIELD)
+                  or t.get("customerId") or "")
+        cname = ((t.get("customerEntity") or {}).get("name")
+                 or cust.get("name") or "")
+        day = str(attr.get(PRE_DATE_FIELD) or "")[:10]
+        if date_filter and day and (day < b_day or day > e_day):
+            continue
+        persons = _pre_persons(t, init)
+        if not persons:
+            continue
+        recs.append({
+            "serial": serial,
+            "cname": cname,
+            "sel": _pre_selected(attr.get(PRE_ITEMS_FIELD)),
+            "dates": {
+                "接单日期": _pre_day(task.get("acceptTime") or t.get("acceptTime")),
+                "计划开始日期": _pre_day(task.get("planStartTime") or t.get("planStartTime")),
+                "开始日期": _pre_day(task.get("startTime") or t.get("startTime")),
+                "完成日期": day,
+            },
+            "persons": persons,
+        })
+    return recs
+
+
+def q_predebug(params, progress, deadline):
+    """预调试进度（在线）宽表：一行 = 一个人（责任人/协作人）
+
+    口径（2026-11-20 hunter 定）：
+      · 数据源 = 预调试工单（独立类型）
+      · 一人一行；同一工单多人时内容重复；未派单的工单过滤掉
+      · 12 个预调项各占一列，选中打 ✓、未选留空
+    时间：无关键字查最近 30 天（按回执「完成/检查日期」）；有填关键字不限时间。
+    关键字筛行在 app._online_filter 里做（缓存存全量，避免缓存被筛坏）。
+    """
+    rows = []
+    for rec in _pre_collect(params, progress, deadline):
+        for name, role in rec["persons"]:
+            row = {"人员": name, "角色": role,
+                   "项目编码": rec["serial"], "客户名称": rec["cname"]}
+            for col, (full, _short) in zip(PRE_ITEM_COLS, PRE_ITEMS):
+                row[col] = "✓" if full in rec["sel"] else ""
+            row.update(rec["dates"])
+            rows.append(row)
+
+    rows.sort(key=lambda r: (r["项目编码"] or "", r["完成日期"] or "", r["人员"] or ""))
+    out = []
+    for i, r in enumerate(rows, 1):
+        item = {"序号": i}
+        for c in PRE_COLUMNS[1:]:
+            item[c] = r.get(c, "")
+        out.append(item)
+    return _resp("ol:predebug-progress", out, PRE_COLUMNS)
+
+
+def q_predebug2(params, progress, deadline):
+    """预调试进度-2（在线）长表：一行 = 一个人 × 一个「已做」的预调项
+
+    2026-11-20 hunter 定：1-12 列合并成一列「检查内容」；
+    **只输出已勾选（做了）的项，没做的不出行** → 可直接统计每人工作量。
+    """
+    rows = []
+    for rec in _pre_collect(params, progress, deadline):
+        for name, role in rec["persons"]:
+            for full, _short in PRE_ITEMS:
+                if full not in rec["sel"]:
+                    continue
+                row = {"人员": name, "角色": role,
+                       "项目编码": rec["serial"], "客户名称": rec["cname"],
+                       "检查内容": full}
+                row.update(rec["dates"])
+                rows.append(row)
+
+    rows.sort(key=lambda r: (r["项目编码"] or "", r["完成日期"] or "", r["人员"] or "",
+                             PRE_ITEM_ORDER.get(r["检查内容"], 99)))
+    out = []
+    for i, r in enumerate(rows, 1):
+        item = {"序号": i}
+        for c in PRE2_COLUMNS[1:]:
+            item[c] = r.get(c, "")
+        out.append(item)
+    return _resp("ol:predebug-progress2", out, PRE2_COLUMNS)
+
+
 # ── 报表 6：保运进度（在线）──────────────────────────────────
 def q_maint(params, progress, deadline):
     """保运进度（在线）：一个项目（客户）一行
@@ -1230,10 +1558,10 @@ def q_maint(params, progress, deadline):
         ct = ts_any(t.get("createTime") or task.get("createTime")) or datetime.min
         cur = best.get(key)
         if cur is None or ct > cur[0]:
-            best[key] = (ct, t, task)
+            best[key] = (ct, t, task, init)
 
     rows = []
-    for _key, (_ct, t, task) in best.items():
+    for _key, (_ct, t, task, init) in best.items():
         attr = task.get("attribute") or {}
         tmp = {}
         if t.get("state") not in ("finished", "closed", "costed", "offed"):
@@ -1248,9 +1576,12 @@ def q_maint(params, progress, deadline):
         cname = (cust.get("name") or (t.get("customerEntity") or {}).get("name") or "").strip()
         st = ts_any(task.get("startTime"))
         ft = ts_any(task.get("completeTime"))
-        row = {"项目编号": serial, "项目名称": cname,
-               "开始时间": st.strftime("%Y-%m-%d %H:%M:%S") if st else "",
-               "完成时间": ft.strftime("%Y-%m-%d %H:%M:%S") if ft else ""}
+        # 2026-11-20 hunter 定：加「人员」列（负责人 + 协同人，换行显示）；时间只到日期
+        persons = _task_persons(t, {"task": task})
+        row = {"人员": "\n".join(persons),
+               "项目编号": serial, "项目名称": cname,
+               "开始时间": st.strftime("%Y-%m-%d") if st else "",
+               "完成时间": ft.strftime("%Y-%m-%d") if ft else ""}
         for f, label in MAINT_ITEMS:
             v = tmp.get(f)
             if v is None or v == "" or v == [] or v == {}:
@@ -1260,6 +1591,50 @@ def q_maint(params, progress, deadline):
 
     rows.sort(key=lambda r: (r.get("项目编号") or "", r.get("项目名称") or ""))
     return _resp("ol:maintain-progress", rows, MAINT_COLUMNS)
+
+
+# ── 报表 6B：保运进度-2（在线）— 2026-11-20 hunter 新增 ────────────
+MAINT2_COLUMNS = ["序号", "人员", "角色", "项目编号", "项目名称",
+                  "开始时间", "完成时间", "检查内容"]
+
+
+def q_maint2(params, progress, deadline):
+    """保运进度-2（在线）长表：一行 = 一个人 × 一个「有记录」的服务项
+
+    2026-11-20 hunter 定：
+      · 一人一行（负责人 + 协同人拆开），协同人也要占一行，内容相同
+      · 人员 = 负责人 + 协同人；没有协同人就只显示负责人（不占空行）
+      · 11 项合并成一列「检查内容」；该项有值才出行，空的不出行
+      · 其它口径同「保运进度（在线）」（时间按工单开始时间、同客户取最近一单）
+    """
+    data = q_maint(params, progress, deadline)
+    rows = []
+    # 复用保运宽表的结果：同一项目已按「创建最近一单」收敛，这里只做行展开
+    for r in data.get("rows") or []:
+        # 2026-11-20 hunter 定：负责人一行；有协同人则每人再占一行；没有协同人只显示负责人
+        names = [x for x in str(r.get("人员") or "").split("\n") if x.strip()]
+        if not names:
+            continue
+        for i, name in enumerate(names):
+            role = "责任人" if i == 0 else "协作人"
+            for _f, label in MAINT_ITEMS:
+                if not str(r.get(label) or "").strip():
+                    continue             # 该项没有记录 → 不出行
+                rows.append({"人员": name, "角色": role,
+                             "项目编号": r.get("项目编号") or "",
+                             "项目名称": r.get("项目名称") or "",
+                             "开始时间": r.get("开始时间") or "",
+                             "完成时间": r.get("完成时间") or "",
+                             "检查内容": MAINT_FULL.get(label, label)})
+    rows.sort(key=lambda x: (x["项目编号"] or "", x["人员"] or "",
+                             MAINT_ORDER.get(x["检查内容"], 99)))
+    out = []
+    for i, r in enumerate(rows, 1):
+        item = {"序号": i}
+        for c in MAINT2_COLUMNS[1:]:
+            item[c] = r.get(c, "")
+        out.append(item)
+    return _resp("ol:maint-progress2", out, MAINT2_COLUMNS)
 
 
 # ── 报表 7：验收进度（在线）──────────────────────────────────
@@ -1360,7 +1735,14 @@ def q_accept(params, progress, deadline):
               or t.get("executorName") or "")
         ft = ts_any(task.get("completeTime"))
         cat = cell(pick("field_xF3USPMV2qusrPcd")) or cell(pick("field_gZKddPgQ15cYoPHu"))
+        # 2026-11-20：验收进度-2 需要协同人（隐藏字段，不进列）
+        syn = []
+        for u in (task.get("synergies") or []):
+            n = ((u or {}).get("displayName") or "").strip()
+            if n and n != ex:
+                syn.append(n)
         rows.append({
+            "__persons": syn,
             "负责人": ex,
             "项目编号": serial,
             "项目名称": cname,
@@ -1374,6 +1756,39 @@ def q_accept(params, progress, deadline):
 
     rows.sort(key=lambda r: (r.get("开始时间") or "", r.get("项目编号") or ""), reverse=True)
     return _resp("ol:accept-progress", rows, ACCEPT_COLUMNS)
+
+
+# ── 报表 7B：验收进度-2（在线）— 2026-11-20 hunter 新增 ────────────
+ACCEPT2_COLUMNS = (["序号", "人员", "角色"] + [c for c in ACCEPT_COLUMNS if c != "负责人"])
+
+
+def q_accept2(params, progress, deadline):
+    """验收进度-2（在线）：一人一行（负责人 + 协同人拆行），内容相同
+
+    2026-11-20 hunter 定：验收内容只有一项，不分项、不打勾；
+    按现有在线表显示，只把人员拆开显示（协同人占一行）。
+    """
+    data = q_accept(params, progress, deadline)
+    rows = []
+    for r in data.get("rows") or []:
+        owner = str(r.get("负责人") or "").strip()
+        names = [owner] if owner else []
+        for extra in (r.get("__persons") or []):
+            n = str(extra or "").strip()
+            if n and n not in names:
+                names.append(n)
+        for i, name in enumerate(names):
+            row = {"人员": name, "角色": "责任人" if i == 0 else "协作人"}
+            for c in ACCEPT2_COLUMNS[3:]:      # 从「角色」之后开始，避免覆盖角色值
+                row[c] = r.get(c, "")
+            rows.append(row)
+    out = []
+    for i, r in enumerate(rows, 1):
+        item = {"序号": i}
+        for c in ACCEPT2_COLUMNS[1:]:
+            item[c] = r.get(c, "")
+        out.append(item)
+    return _resp("ol:accept-progress2", out, ACCEPT2_COLUMNS)
 
 
 # ── 报表 8：稽核检查（在线）──────────────────────────────────
@@ -2487,9 +2902,14 @@ HANDLERS = {
     "ol:weekly-plan": q_weekly,
     "ol:progress2": q_progress2,
     "ol:workload": q_workload,
+    "ol:debug-summary": q_debug_summary,
     "ol:debug-progress": q_debug,
+    "ol:predebug-progress": q_predebug,
+    "ol:predebug-progress2": q_predebug2,
     "ol:maintain-progress": q_maint,
+    "ol:maint-progress2": q_maint2,
     "ol:accept-progress": q_accept,
+    "ol:accept-progress2": q_accept2,
     "ol:audit-check": q_audit_check,
     "ol:task-query": q_task_query,
     "ol:issue-tasks": q_issue_tasks,

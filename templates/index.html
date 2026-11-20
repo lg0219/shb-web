@@ -71,7 +71,7 @@ body { font-family:-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB',san
 .icon-btn { width:32px; height:32px; border:1px solid var(--line); background:var(--surface); border-radius:var(--r-sm); cursor:pointer; font-size:15px; color:var(--ink-2); display:inline-flex; align-items:center; justify-content:center; transition:background-color .12s ease,border-color .12s ease; }
 .icon-btn:hover { background:var(--surface-2); border-color:var(--line-2); }
 .crumb { font-size:15px; font-weight:600; color:var(--ink); }
-.crumb-note { font-size:12px; color:var(--ink-3); line-height:1.5; white-space:pre-line; overflow:hidden; max-height:48px; flex:1; min-width:0; }
+.crumb-note { font-size:12px; color:#d63031; line-height:1.5; white-space:pre-line; overflow:hidden; max-height:48px; flex:1; min-width:0; }
 .wp-tab { padding:5px 14px; border:1px solid var(--line); background:var(--surface); border-radius:var(--r-sm); font-size:13px; color:var(--ink-2); cursor:pointer; transition:background-color .12s ease,color .12s ease,border-color .12s ease; }
 .wp-tab:hover { border-color:var(--line-2); color:var(--ink); }
 .wp-tab.active { background:var(--accent-soft); color:#0a7a7a; border-color:rgba(19,194,194,.45); }
@@ -272,6 +272,7 @@ let allTabs = {{ all_tabs | tojson }};
 let userTabs = {{ tabs | tojson }};
 let tabTitles = {{ tab_titles | tojson }};
 let isAdmin = {{ 'true' if current_user == 'admin' else 'false' }};
+let canExport = {{ 'true' if can_export else 'false' }};   // 2026-11-20：导出权限（后端 permissions.json export 字段）
 if (userTabs && userTabs.length) currentTab = (userTabs.indexOf('bk_overview') >= 0 ? 'bk_overview' : userTabs[0]);
 
 // ── 侧边栏菜单（分组）──
@@ -447,7 +448,7 @@ const RESULT_FORMS = {
 };
 
 // ══ 在线报表（ol:*）—— 云端实时查询，与本地库无关（2026-11-10）══
-const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:debug-progress', 'ol:maintain-progress', 'ol:accept-progress', 'ol:audit-check', 'ol:task-query', 'ol:issue-tasks', 'ol:work-report', 'ol:task-map', 'ol:customer-map', 'ol:staff-map'];
+const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workload', 'ol:predebug-progress', 'ol:predebug-progress2', 'ol:debug-summary', 'ol:debug-progress', 'ol:maintain-progress', 'ol:maint-progress2', 'ol:accept-progress', 'ol:accept-progress2', 'ol:audit-check', 'ol:task-query', 'ol:issue-tasks', 'ol:work-report', 'ol:task-map', 'ol:customer-map', 'ol:staff-map'];
 // 项目进度（在线）查询口径说明（显示在页面标题右侧，红色小字）
 const PROGRESS2_NOTE = '说明：关键字按客户编号或客户名称模糊匹配，不限时间；日期筛选客户档案的最后更新日期，留空表示不限；默认隐藏已填保运完毕日期的客户，勾选「显示已完成」才显示。';
 // 调试进度（在线）说明
@@ -462,7 +463,61 @@ const WORKLOAD_NOTE = '说明：每天到场/离场都要打卡；工时按「�
 const AUDIT_NOTE = '说明：按工单创建时间筛选，默认当月。\n重复工单：仅查工程/预调试/调试/验收/保运五类，同客户同类型超过 1 单即报，涉及人员取建单人，「时间」列取各单建单日期（多单换行）。\n漏打卡：查全部工单类型，只看已开始的单，按参与人（协同人+实际签到人）检查到场/离场打卡，「时间」列取缺卡日期。\n计划日期未填：除工程工单外全部类型，计划开始/结束时间缺失即报，涉及人员取负责人，不涉及时间。\n验收整改：仅验收工单，「是否合格」为不合格且整改内容子表单为空即报，涉及人员取负责人（未分配则跳过），不涉及时间。';
 const TASK_QUERY_NOTE = '说明：默认只查当天的工单（按更新日期）；状态可多选；关键字匹配工单号、客户编号、客户名称、负责人。';
 const ISSUE_NOTE = '说明：默认查询本周（周一至今天）创建的工单，按创建时间筛选；状态可多选；关键字匹配编号、客户、问题描述、主责任人员、处理方案；点任意一行查看完整详情。';
-const TAB_NOTES = {'ol:task-query': TASK_QUERY_NOTE, 'ol:issue-tasks': ISSUE_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
+// 预调试进度（在线）说明（2026-11-20 新增）
+const PREDEBUG_NOTE = '说明：数据源为预调试工单，一人一行（责任人 + 协作人）；同一工单多人时内容重复；未派单的工单不显示；12 个预调项打勾表示已做；日期四列：接单、计划开始、开始、完成（完成=回执的检查日期）；默认查最近 30 天（按完成日期），输入关键字不限时间。';
+// 预调试 12 项：列名 → 选项全称（表头 ? 气泡用）
+const PRE_ITEM_FULL = {
+  '1 线路': '检查全站线路连接',
+  '2 UPS': '安装UPS电源',
+  '3 触摸屏': '设备上电并检查触摸屏显示是否正常',
+  '4 收费电脑': '收费电脑安装',
+  '5 站控PLC': '站控系统安装、PLC程序安装',
+  '6 急停': '检查急停按钮',
+  '7 燃气探测': '检查燃气探测器',
+  '8 加液机': '检查加液机通讯',
+  '9 空压机': '空压机上电、气路吹扫并检查漏点',
+  '10 控制柜': '控制柜通讯是否正常',
+  '11 气动阀': '气动阀电动测试',
+  '12 连锁测试': '急停按钮、燃气报警等系统连锁测试'
+};
+const PREDEBUG2_NOTE = '说明：预调试长表 —— 一行 = 一个人 × 一个已做的预调项（没做的不出行），可直接统计每人的工作量与内容；其他口径同「预调试进度（在线）」。';
+const MAINT2_NOTE = '说明：保运长表 —— 一行 = 一个人 × 一个有记录的服务项（无记录的不出行）；人员 = 负责人 + 协同人（有协同人则每人一行，没有就只显示负责人）；日期按工单开始时间筛选，默认当月；有填关键字时不限时间。';
+const ACCEPT2_NOTE = '说明：验收进度按人拆分 —— 负责人、协同人各占一行，内容相同；日期按工单开始时间筛选，默认当月；有填关键字时不限时间。';
+// 调试进度（在线）汇总说明（2026-11-20 新增）
+const DEBUG_SUMMARY_NOTE = '说明：一个项目一行（同项目多单取调试日期最新的一单）；调试内容按「数字.简称」列显示，做过的打勾；关键字可按项目编码/客户名称/调试人员查，不限时间。';
+// 调试内容：列名 → 全称（表头 ? 气泡）
+// 保运 11 项：列名 → 全称（2026-11-20 hunter 定：鼠标悬停表头显示全称，不加 ? 气泡）
+const MAINT_ITEM_FULL = {
+  '1.测控系统': '1、检查控制系统是否显示正常',
+  '2.控制开关': '2、检查各阀门开关、控制是否正常',
+  '3.排除液氮': '3、排除储罐内液氮',
+  '4.进LNG': '4、储罐进LNG',
+  '5.漏点': '5、管路漏点处理、冷紧',
+  '6.卸车培训': '6、培训卸车操作',
+  '7.加液培训': '7、培训加液操作',
+  '8.站控培训': '8、培训站控系统',
+  '9.收费培训': '9、培训收费系统',
+  '10.安全培训': '10、安全培训',
+  '11.其他': '11、其他'
+};
+const DEBUG_ITEM_FULL = {
+  '1.清点': '清点货物',
+  '2.卸车阀管': '卸车拉断阀、软管安装',
+  '3.潜液泵': '潜液泵安装',
+  '4.过滤网清理': '泵池入口处过滤网清理',
+  '5.液氮预冷': '储罐液氮预冷、进液氮',
+  '6.吹扫管路': '吹扫管路',
+  '7.漏点-安全阀': '管路漏点测试-安全阀、冷紧',
+  '8.漏点-法兰': '管路漏点测试-管路法兰、冷紧',
+  '9.漏点-阀门': '管路漏点测试-管路阀门、冷紧',
+  '10.柱塞泵打压': '柱塞泵打压测试',
+  '11.加液软管': '加液机安装软管',
+  '12.流量计': '加液机流量计安装',
+  '13.加液枪': '加液枪安装',
+  '14.循环测试': '加液机打循环测试',
+  '15.转向测试': '潜液泵转向测试'
+};
+const TAB_NOTES = {'ol:task-query': TASK_QUERY_NOTE, 'ol:issue-tasks': ISSUE_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:predebug-progress': PREDEBUG_NOTE, 'ol:predebug-progress2': PREDEBUG2_NOTE, 'ol:debug-summary': DEBUG_SUMMARY_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:maint-progress2': MAINT2_NOTE, 'ol:accept-progress2': ACCEPT2_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
   'ol:trip': [
@@ -485,6 +540,21 @@ const ONLINE_FORMS = {
     {id:'olwl_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单的创建时间（建单时间）'},
     {id:'olwl_end', label:'日期至', type:'date', param:'date_end', tip:'工单的创建时间（建单时间）'}
   ],
+  'ol:predebug-progress': [
+    {id:'olpre_kw', label:'关键字', ph:'客户编号/客户名称/人员（可空）', param:'keyword'},
+    {id:'olpre_begin', label:'日期从', type:'date', param:'date_begin', tip:'回执的检查日期'},
+    {id:'olpre_end', label:'日期至', type:'date', param:'date_end', tip:'回执的检查日期'}
+  ],
+  'ol:predebug-progress2': [
+    {id:'olpre2_kw', label:'关键字', ph:'客户编号/客户名称/人员/检查内容（可空）', param:'keyword'},
+    {id:'olpre2_begin', label:'日期从', type:'date', param:'date_begin', tip:'回执的检查日期'},
+    {id:'olpre2_end', label:'日期至', type:'date', param:'date_end', tip:'回执的检查日期'}
+  ],
+  'ol:debug-summary': [
+    {id:'olds_kw', label:'关键字', ph:'项目编码/客户名称/调试人员（可空）', param:'keyword'},
+    {id:'olds_begin', label:'日期从', type:'date', param:'date_begin', tip:'实际调试完成日期'},
+    {id:'olds_end', label:'日期至', type:'date', param:'date_end', tip:'实际调试完成日期'}
+  ],
   'ol:debug-progress': [
     {id:'oldebug_kw', label:'关键字', ph:'工单编号/客户（可空）', param:'keyword'},
     {id:'oldebug_begin', label:'日期从', type:'date', param:'date_begin', tip:'实际调试完成日期'},
@@ -499,6 +569,16 @@ const ONLINE_FORMS = {
     {id:'ola_kw', label:'关键字', ph:'项目编号/项目名称/工单号', param:'keyword'},
     {id:'ola_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单开始时间'},
     {id:'ola_end', label:'日期至', type:'date', param:'date_end', tip:'工单开始时间'}
+  ],
+  'ol:maint-progress2': [
+    {id:'olm2_kw', label:'关键字', ph:'项目编号/项目名称/人员/检查内容', param:'keyword'},
+    {id:'olm2_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单开始时间'},
+    {id:'olm2_end', label:'日期至', type:'date', param:'date_end', tip:'工单开始时间'}
+  ],
+  'ol:accept-progress2': [
+    {id:'ola2_kw', label:'关键字', ph:'项目编号/项目名称/人员', param:'keyword'},
+    {id:'ola2_begin', label:'日期从', type:'date', param:'date_begin', tip:'工单开始时间'},
+    {id:'ola2_end', label:'日期至', type:'date', param:'date_end', tip:'工单开始时间'}
   ],
   'ol:audit-check': [
     {id:'olaud_kw', label:'姓名', ph:'涉及人员姓名（可空）', param:'keyword'},
@@ -606,7 +686,7 @@ function buildResultForm(tab) {
     }
   });
   html += '<button class="btn-query" id="btn-search-res" onclick="doSearch()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>查询</button>';
-  if (isAdmin && !NO_EXPORT[tab]) {
+  if ((isAdmin || canExport) && !NO_EXPORT[tab]) {
     html += '<button class="btn-export" onclick="doExport()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel</button>';
   }
   if (!isOl && isAdmin && !NO_SAVE[tab]) {
@@ -1372,8 +1452,7 @@ window.addEventListener('resize', function () {
   (window._wrCharts || []).forEach(c => { try { c.resize(); } catch (e) {} });
 });
 
-function renderResultData(data) {
-  const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
+function renderResultData(data) {  const tc = document.getElementById('table-container'), pg = document.getElementById('pagination');
   if (data.blocks) { renderWorkReport(data); return; }
   if (data.map) { renderMapReport(data); return; }
   if (data.sections) { renderSections(data); pg.style.display = 'none'; return; }
@@ -1388,10 +1467,16 @@ function renderResultData(data) {
     let _th = _rawCells ? c : esc(c);
     // 保运进度（2026-11-11 hunter 定）：11 项检查标题太长（如“1、检查控制系统是否显示正常”），
     // 表头只显示序号数字，完整标题放到 th 的 title 上，鼠标悬停可见；导出 Excel 仍用完整标题。
+    // 2026-11-20 hunter 定：11/12/15 项列名用「数字.简称」，鼠标悬停表头显示全称（不用 ? 气泡）
     let _thTitle = '';
-    if (currentTab === 'ol:maintain-progress') {
-      const _m = /^(\d+)、/.exec(c);
-      if (_m) { _th = _m[1]; _thTitle = ' title="' + esc(c) + '"'; }
+    if (currentTab === 'ol:maintain-progress' && MAINT_ITEM_FULL[c]) {
+      _thTitle = ' title="' + esc(MAINT_ITEM_FULL[c]) + '"';
+    }
+    if (currentTab === 'ol:predebug-progress' && PRE_ITEM_FULL[c]) {
+      _thTitle = ' title="' + esc(PRE_ITEM_FULL[c]) + '"';
+    }
+    if (currentTab === 'ol:debug-summary' && DEBUG_ITEM_FULL[c]) {
+      _thTitle = ' title="' + esc(DEBUG_ITEM_FULL[c]) + '"';
     }
     if ((currentTab === 'trip' || currentTab === 'ol:trip') && c === '工作内容') {
       _th += '<span class="qmark" title="' + esc(TRIP_WORK_TIP) + '">?</span>';
@@ -1402,6 +1487,13 @@ function renderResultData(data) {
     const _v = row[c] == null ? '' : row[c];
     if (_rawCells) return '<td title="'+esc(String(_v).replace(/<br\s*\/?>/gi,' / '))+'" class="col-wrap"'+(ci === 0 ? ' style="text-align:center"' : '')+'>'+_v+'</td>';
     // 2026-11-12：行程单「工单编号」「工单类型」、稽核检查「时间」多个值换行显示
+    if (!_rawCells && _isTimeCol(c) && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(String(_v))) {
+      return '<td title="' + esc(_v) + '" class="col-text">' + esc(_dateOnly(_v)) + '</td>';
+    }
+    if (!_rawCells && c === '人员' && String(_v).indexOf('\n') >= 0) {
+      // 2026-11-20：保运进度「人员」列（负责人 + 协同人）换行显示
+      return '<td title="'+esc(_v)+'" class="col-wrap">'+esc(_v).replace(/\n/g,'<br>')+'</td>';
+    }
     if (!_rawCells && (c === '工单号' || c === '工单编号' || c === '工单类型' || c === '错误描述' || c === '时间') && String(_v).indexOf('\n') >= 0) {
       return '<td title="'+esc(_v)+'" class="col-wrap">'+esc(_v).replace(/\n/g,'<br>')+'</td>';
     }
@@ -1702,7 +1794,7 @@ async function doExportExcel(baseParams) {
       const addGrid = (name, data) => {
         const rawCols = data.columns || [];
         const aoa = [rawCols.map(_cellText)];
-        (data.rows || []).forEach(r => aoa.push(rawCols.map(c => _cellText(r[c]))));
+        (data.rows || []).forEach(r => aoa.push(rawCols.map(c => _cellTextCol(c, r[c]))));
         XLSX.utils.book_append_sheet(wb0, XLSX.utils.aoa_to_sheet(aoa), name);
       };
       addGrid('周计划', pl);
@@ -1755,6 +1847,15 @@ async function doExportExcel(baseParams) {
 
 // 在线报表：直接用最近一次查询结果生成 Excel（不再回查）
 // 在线报表：直接用最近一次查询结果生成 Excel（周计划：周计划+周总结 两个 sheet）
+// 2026-11-20 hunter 定：所有报表的「时间/日期」列只显示到日期（悬停/导出也按此）
+function _isTimeCol(c) { return /时间|日期/.test(String(c || '')); }
+function _dateOnly(v) {
+  const t = String(v == null ? '' : v);
+  const m = /^(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}/.exec(t);
+  return m ? m[1] : t;
+}
+function _cellTextCol(c, v) { return _isTimeCol(c) ? _dateOnly(_cellText(v)) : _cellText(v); }
+
 function _cellText(v) {
   let s = String(v == null ? '' : v);
   s = s.replace(/<br\s*\/?>/gi, '\n');
@@ -1765,7 +1866,7 @@ function _cellText(v) {
 function _appendSheet(wb, name, data) {
   const cols = (data && data.columns) || [];
   const aoa = [cols.map(_cellText)];
-  ((data && data.rows) || []).forEach(r => aoa.push(cols.map(c => _cellText(r[c]))));
+  ((data && data.rows) || []).forEach(r => aoa.push(cols.map(c => _cellTextCol(c, r[c]))));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name);
 }
 
@@ -1843,9 +1944,14 @@ async function _appendIssueFullSheets(wb, data, box) {
 async function doExportOnline() {
   const box = document.getElementById('job-status');
   const base = {'ol:trip':'行程单（在线）','ol:workload':'服务人员工作量（在线）',
-                'ol:progress2':'项目进度（在线）','ol:debug-progress':'调试进度（在线）',
+                'ol:progress2':'项目进度（在线）','ol:predebug-progress':'预调试进度（在线）',
+                'ol:predebug-progress2':'预调试进度-2',
+                'ol:debug-progress':'调试进度-2',
+                'ol:debug-summary':'调试进度（在线）',
                 'ol:maintain-progress':'保运进度（在线）',
+                'ol:maint-progress2':'保运进度-2',
                 'ol:accept-progress':'验收进度（在线）',
+                'ol:accept-progress2':'验收进度-2',
                 'ol:audit-check':'稽核检查（在线）',
                 'ol:task-query':'工单查询',
                 'ol:issue-tasks':'问题工单',
@@ -1896,7 +2002,7 @@ async function doExportOnline() {
         Object.keys(byName).forEach(nm => {
           const rs = byName[nm];
           const aoa = [cols.map(_cellText)];
-          rs.forEach((r, i) => aoa.push(cols.map(c => (c === '序号' ? i + 1 : _cellText(r[c])))));
+          rs.forEach((r, i) => aoa.push(cols.map(c => (c === '序号' ? i + 1 : _cellTextCol(c, r[c])))));
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), _sheetName(nm, used));
         });
       } else if (currentTab === 'ol:issue-tasks') {
@@ -2437,6 +2543,9 @@ function renderUsersAccount() {
     } else {
       chips = r.tabs.map(t => '<span class="chip">' + esc(uaTabTitle(t)) + '</span>').join('');
     }
+    if (!r.is_admin && r.export) {
+      chips = '<span class="chip active">可导出</span>' + chips;   // 2026-11-20：导出权限标记
+    }
     html += '<tr><td class="col-text" style="font-weight:600">' + esc(r.user)
           + (r.is_admin ? ' <span style="color:#d63031;font-weight:400">(内置)</span>' : '') + '</td>';
     html += '<td>' + pw + '</td><td class="col-wrap">' + chips + '</td><td>';
@@ -2483,6 +2592,11 @@ function openUaModal(idx) {
             + esc(t.title) + '</button>';
     });
     html += '</div></div>';
+    // 2026-11-20：导出权限开关（方案A 单一开关）
+    html += '<div class="form-group" style="margin-top:10px;flex-direction:row;align-items:center;gap:6px">'
+          + '<input type="checkbox" id="ua_export" style="min-width:auto;width:16px;height:16px;cursor:pointer"'
+          + (isEdit && row.export ? ' checked' : '') + '>'
+          + '<label for="ua_export" style="margin:0;cursor:pointer">允许导出 Excel</label></div>';
   } else {
     html += '<div style="margin-top:12px;color:#6b7280;font-size:13px">该账号为内置管理员，固定拥有全部权限。</div>';
   }
@@ -2517,6 +2631,8 @@ async function saveUaUser() {
   const name = (nameInp.value || '').trim();
   const password = (pwInp.value || '');
   const tabs = Array.from(document.querySelectorAll('#ua_chips .chip.active')).map(b => b.dataset.key);
+  const _expEl = document.getElementById('ua_export');
+  const exportOn = !!(_expEl && _expEl.checked);   // 2026-11-20：导出权限
 
   msg.textContent = '';
   if (!name) { msg.textContent = '用户名不能为空'; return; }
@@ -2524,7 +2640,7 @@ async function saveUaUser() {
   try {
     const d = await uaFetchJson('/shb/api/users-account', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({user: name, tabs: tabs, password: password})
+      body: JSON.stringify({user: name, tabs: tabs, password: password, export: exportOn})
     });
     if (!d.ok) { msg.textContent = d.error || '保存失败'; btn.disabled = false; btn.textContent = '保存'; return; }
     closeUaModal();
@@ -2560,7 +2676,7 @@ buildResultForm(currentTab);
 document.getElementById('table-container').innerHTML = '<div class="empty">输入条件后点击「查询」</div>';
 document.getElementById('pagination').style.display = 'none';
 const _eb = document.getElementById('export-btn');
-_eb.style.display = (isAdmin && currentTab !== 'bk_overview' && !NO_EXPORT[currentTab]) ? '' : 'none';
+_eb.style.display = ((isAdmin || canExport) && currentTab !== 'bk_overview' && !NO_EXPORT[currentTab]) ? '' : 'none';
 _eb.innerHTML = (RESULT_FORMS[currentTab] ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 Excel' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M4 21h16"/></svg>导出 CSV');
 </script>
 <div id="task-modal" class="tmodal" style="display:none" onclick="if(event.target===this)closeTaskDetail()">

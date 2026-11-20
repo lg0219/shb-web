@@ -63,8 +63,9 @@ def build_debug(tasks, details, tmp_map=None, keyword="", date_filter=True,
                 continue
             if keyword and not any(keyword in str(x) for x in (serial, cname, names, content)):
                 continue
+            # 2026-11-20 新增 __tid（工单 ID）：供「调试进度（在线）」汇总表按项目取最新一单
             rows.append({"调试人员": names, "项目编码": serial, "客户名称": cname,
-                         "调试内容": content, "调试日期": day})
+                         "调试内容": content, "调试日期": day, "__tid": t.get("id")})
 
     rows.sort(key=lambda r: (r["项目编码"] or "", r["调试日期"] or "", r["调试内容"] or ""))
     return [{"序号": i, **r} for i, r in enumerate(rows, 1)]

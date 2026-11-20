@@ -147,9 +147,14 @@ ONLINE_TABS = {
     "ol:weekly-plan": "周计划（在线）",
     "ol:progress2": "项目进度（在线）",
     "ol:workload": "服务人员工作量（在线）",
-    "ol:debug-progress": "调试进度（在线）",
+    "ol:predebug-progress": "预调试进度（在线）",
+    "ol:predebug-progress2": "预调试进度-2",
+    "ol:debug-summary": "调试进度（在线）",
+    "ol:debug-progress": "调试进度-2",
     "ol:maintain-progress": "保运进度（在线）",
+    "ol:maint-progress2": "保运进度-2",
     "ol:accept-progress": "验收进度（在线）",
+    "ol:accept-progress2": "验收进度-2",
     "ol:audit-check": "稽核检查（在线）",
     "ol:task-query": "工单查询",
     "ol:issue-tasks": "问题工单",
@@ -1641,6 +1646,19 @@ def get_user_permissions():
     return user, dedup(tabs)
 
 
+def _can_export(user: str) -> bool:
+    """导出权限（2026-11-20 新增，方案A：单一开关）
+
+    来源：permissions.json 中该用户的 "export" 字段。
+    缺省 False —— 老用户没有该字段时保持历史行为（不能导出），避免静默放权。
+    admin 为内置管理员，恒为 True。
+    """
+    if user == UA_ADMIN:
+        return True
+    p = load_permissions().get(user)
+    return bool(isinstance(p, dict) and p.get("export") is True)
+
+
 # ══ 账号管理（shb-web 登录用户 = nginx Basic Auth 账号 + Tab 权限）══
 # 两处数据源必须同步维护：
 #   /etc/nginx/.shb-passwd   → 能登录（用户名 + apr1 哈希）
@@ -1794,6 +1812,7 @@ def api_users_account():
             "user": name,
             "tabs": list(tabs),
             "is_admin": is_admin,
+            "export": is_admin or _can_export(name),
             "has_password": name in accounts,
         })
     return jsonify({"ok": True, "rows": rows,
@@ -1841,6 +1860,16 @@ def api_users_account_save():
             return jsonify({"ok": False, "error": f"未知 Tab: {', '.join(unknown)}"})
         tabs = [t for t in tabs if t != "*"]        # 非 admin 不允许通配全部
 
+    # 导出开关（2026-11-20）：admin 恒 True；未传该字段时沿用旧值，
+    # 避免只改密码时把已有导出权限冲掉。
+    if is_admin:
+        can_export = True
+    elif body.get("export") is None:
+        old = perms.get(name)
+        can_export = bool(isinstance(old, dict) and old.get("export") is True)
+    else:
+        can_export = bool(body.get("export"))
+
     # 1) 写密码文件
     if password:
         try:
@@ -1850,8 +1879,8 @@ def api_users_account_save():
             return jsonify({"ok": False, "error": f"写入登录密码失败: {e}"})
 
     # 2) 写权限文件（admin 恒为 *，不做实体列表，避免误导）
-    perms[name] = {"tabs": tabs}
-    perms[UA_ADMIN] = {"tabs": ["*"]}
+    perms[name] = {"tabs": tabs, "export": can_export}
+    perms[UA_ADMIN] = {"tabs": ["*"], "export": True}
     try:
         _locked_write_json(PERMISSIONS_FILE, perms)
     except Exception as e:
@@ -1862,14 +1891,14 @@ def api_users_account_save():
     back_perm = load_permissions().get(name, {})
     if name not in back_acc:
         return jsonify({"ok": False, "error": "校验失败：登录账号未落盘"})
-    if back_perm.get("tabs") != tabs:
-        return jsonify({"ok": False, "error": "校验失败：Tab 权限未落盘"})
+    if back_perm.get("tabs") != tabs or bool(back_perm.get("export")) != can_export:
+        return jsonify({"ok": False, "error": "校验失败：权限未落盘"})
 
-    _ua_audit("save", name, {"tabs": tabs, "password_changed": bool(password),
-                             "created": not exists})
-    logger.info("UA_SAVE user=%s created=%s pw=%s tabs=%d",
-                name, not exists, bool(password), len(tabs))
-    return jsonify({"ok": True, "user": name, "tabs": tabs,
+    _ua_audit("save", name, {"tabs": tabs, "export": can_export,
+                             "password_changed": bool(password), "created": not exists})
+    logger.info("UA_SAVE user=%s created=%s pw=%s tabs=%d export=%s",
+                name, not exists, bool(password), len(tabs), can_export)
+    return jsonify({"ok": True, "user": name, "tabs": tabs, "export": can_export,
                     "created": not exists, "password_changed": bool(password)})
 
 
@@ -2079,7 +2108,8 @@ def index():
     titles.update(ONLINE_TABS)
     titles.update(backup_tab_titles())
     resp = make_response(render_template("index.html", current_user=user, tabs=tabs,
-                           all_tabs=ALL_TABS, tab_titles=titles))
+                           all_tabs=ALL_TABS, tab_titles=titles,
+                           can_export=_can_export(user)))
     # 2026-11-13：登录审计 —— 带 Authorization 且无 shb_seen cookie 视为本次登录
     if request.headers.get("Authorization") and request.cookies.get("shb_seen") != "1":
         _web_audit("login", agent=(request.headers.get("User-Agent") or "")[:120])
@@ -2259,6 +2289,9 @@ def api_export():
     tab = request.args.get("tab", "station")
     if tab not in user_tabs:
         return make_response(jsonify({"ok": False, "error": "无权限导出该 Tab"}), 403)
+    # 2026-11-20：导出权限独立可配（原先只在前端按 isAdmin 隐藏按钮，后端无校验）
+    if not _can_export(user):
+        return make_response(jsonify({"ok": False, "error": "无导出权限，请联系管理员开通"}), 403)
 
     if tab == "records":
         return jsonify({"ok": False, "error": "该报表不支持导出"})
@@ -2410,10 +2443,40 @@ def _online_filter(tab, resp, keyword, types=""):
             rows = [r for r in rows if r.get("错误类型") in _ts]
         if keyword:
             rows = [r for r in rows if keyword in str(r.get("涉及人员") or "")]
+    elif tab == "ol:predebug-progress2":
+        # 2026-11-20：长表关键字筛（人员/项目编码/客户名称/检查内容），筛后重排序号
+        keys = ("人员", "项目编码", "客户名称", "检查内容")
+        rows = [r for r in (resp.get("rows") or [])
+                if any(keyword in str(r.get(k) or "") for k in keys)]
+        rows = [dict(r, 序号=i) for i, r in enumerate(rows, 1)]
+    elif tab == "ol:maint-progress2":
+        # 2026-11-20：保运长表关键字筛（人员/项目编号/项目名称/检查内容），筛后重排序号
+        keys = ("人员", "项目编号", "项目名称", "检查内容")
+        rows = [r for r in (resp.get("rows") or [])
+                if any(keyword in str(r.get(k) or "") for k in keys)]
+        rows = [dict(r, 序号=i) for i, r in enumerate(rows, 1)]
+    elif tab == "ol:accept-progress2":
+        # 2026-11-20：验收拆人表关键字筛（人员/项目编号/项目名称）
+        keys = ("人员", "项目编号", "项目名称")
+        rows = [r for r in (resp.get("rows") or [])
+                if any(keyword in str(r.get(k) or "") for k in keys)]
+        rows = [dict(r, 序号=i) for i, r in enumerate(rows, 1)]
+    elif tab == "ol:debug-summary":
+        # 2026-11-20：调试汇总（一项目一行）关键字筛 + 重排序号
+        keys = ("项目编码", "客户名称", "调试人员")
+        rows = [r for r in (resp.get("rows") or [])
+                if any(keyword in str(r.get(k) or "") for k in keys)]
+        rows = [dict(r, 序号=i) for i, r in enumerate(rows, 1)]
     elif tab == "ol:debug-progress":
         keys = ("项目编码", "客户名称", "调试人员", "调试内容")
         rows = [r for r in (resp.get("rows") or [])
                 if any(keyword in str(r.get(k) or "") for k in keys)]
+    elif tab == "ol:predebug-progress":
+        # 2026-11-20：预调试进度关键字筛（人员/项目编码/客户名称），筛后重排序号
+        keys = ("人员", "项目编码", "客户名称")
+        rows = [r for r in (resp.get("rows") or [])
+                if any(keyword in str(r.get(k) or "") for k in keys)]
+        rows = [dict(r, 序号=i) for i, r in enumerate(rows, 1)]
     else:
         return resp
     out = dict(resp)
@@ -2602,7 +2665,7 @@ def api_online_query():
     types = (params.get("types") or "").strip()   # 稽核检查：错误类型（只做结果行过滤）
     base = dict(params)
     base.pop("keyword", None)
-    if tab in ("ol:progress2", "ol:debug-progress", "ol:maintain-progress", "ol:accept-progress",
+    if tab in ("ol:progress2", "ol:debug-summary", "ol:debug-progress", "ol:predebug-progress", "ol:predebug-progress2", "ol:maintain-progress", "ol:maint-progress2", "ol:accept-progress", "ol:accept-progress2",
                "ol:task-query", "ol:issue-tasks"):
         # 项目进度 / 调试进度 / 保运进度 / 验收进度（2026-11-11）：关键字参与取数（决定是否按时间筛），
         # 因此 keyword 必须随 base 进缓存键，避免「按时间筛的结果」被关键字查询复用。
