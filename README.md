@@ -44,7 +44,6 @@ shb-web/
 ├── workload_core.py       # 服务人员工作量（97 行）
 ├── debug_core.py          # 调试/保运/验收 进度（71 行）
 ├── bridge.py              # MCP / SHB 客户端薄封装（57 行）
-├── sync_aitable.py        # 钉钉 AI 表格同步脚本（211 行）
 ├── templates/
 │   └── index.html         # 单页前端（2913 行，Vue-less 原生 JS）
 ├── static/
