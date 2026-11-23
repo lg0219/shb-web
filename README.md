@@ -213,7 +213,6 @@ vim permissions.json
 | v1.6.0 | 2026-11-13 | 工单在线查询与报表修复 |
 | v1.5.0 | 2026-11-11 | 周计划/周总结上线、多用户改造 |
 
-> 完整提交历史：`git log --oneline` / GitHub Releases / Forgejo Tags
 
 ---
 
