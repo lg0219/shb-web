@@ -224,14 +224,3 @@ vim permissions.json
 - **钉钉知识库备份 SOP**：`skills/dingtalk-wiki-backup/SKILL.md`
 - **员工授权 SOP**：`skills/shb-agent/SOP.md`（`shb-agent` 文件夹）
 
----
-
-## 🔗 仓库地址
-
-- **GitHub（主）**：https://github.com/lg0219/shb-web （私有，Release 发布）
-- **内网 Forgejo（镜像）**：http://192.168.1.23:3000/ligang/shb-web （公开，仅代码同步）
-
----
-
-> 维护者：lg0219  
-> 部署环境：Ubuntu 22.04 / Python 3.10 / Flask / Nginx / systemd / OpenClaw Gateway
