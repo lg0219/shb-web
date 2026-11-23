@@ -1775,6 +1775,64 @@ def _ua_admin_only():
     return (request.headers.get("X-Remote-User", "") or UA_ADMIN) == UA_ADMIN
 
 
+# ── 三级角色（2026-11-23 hunter 定）──
+# admin  ：内置超级管理员，恒全权，不落 JSON
+# subadmin：子管理员——只能调「普通用户」的 Tab 权限与导出开关，
+#           范围限于自己拥有的 Tab；不能增删用户、不能改密码、不能碰 admin/其他子管理员/自己
+# user    ：普通用户，无管理权
+UA_ROLE_SUBADMIN = "subadmin"
+
+
+def _ua_current_user():
+    return request.headers.get("X-Remote-User", "") or UA_ADMIN
+
+
+def _ua_role_of(user):
+    """返回 admin / subadmin / user（admin 恒为内置，不读 JSON）"""
+    if not user or user == UA_ADMIN:
+        return UA_ADMIN
+    p = load_permissions().get(user)
+    if isinstance(p, dict) and p.get("role") == UA_ROLE_SUBADMIN:
+        return UA_ROLE_SUBADMIN
+    return "user"
+
+
+def _ua_me():
+    u = _ua_current_user()
+    return u, _ua_role_of(u)
+
+
+def _ua_manager_only():
+    return _ua_role_of(_ua_current_user()) in (UA_ADMIN, UA_ROLE_SUBADMIN)
+
+
+def _is_manager(user=None):
+    """admin 或 subadmin——用于同步中心/日志/身份管理等运营类接口（2026-11-23 hunter 定）"""
+    u = user or _ua_current_user()
+    return _ua_role_of(u) in (UA_ADMIN, UA_ROLE_SUBADMIN)
+
+
+def _ua_my_tabs(user):
+    """该用户当前可访问的 Tab 全集（展开 * 与 bk:*）——子管理员的可授予上限"""
+    if user == UA_ADMIN:
+        return list(_all_tab_keys())
+    p = load_permissions().get(user) or {}
+    tabs = p.get("tabs", []) if isinstance(p, dict) else []
+    out, seen = [], set()
+    for t in tabs:
+        if t == "*":
+            cand = _all_tab_keys()
+        elif t == "bk:*":
+            cand = list(backup_tab_titles().keys())
+        else:
+            cand = [t]
+        for x in cand:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+    return out
+
+
 def _ua_validate_username(name):
     if not name:
         return "用户名不能为空"
@@ -1795,39 +1853,60 @@ def _ua_validate_password(pw, required=False):
 
 @app.route("/api/users-account", methods=["GET"])
 def api_users_account():
-    """列出全部用户：登录账号（htpasswd）+ Tab 权限（permissions.json）"""
-    if not _ua_admin_only():
+    """列出全部用户：登录账号（htpasswd）+ Tab 权限（permissions.json）
+
+    2026-11-23：改为「管理员可读」——admin 全权，subadmin 只读可见 + 可编普通用户。
+    """
+    if not _ua_manager_only():
         return make_response(jsonify({"ok": False, "error": "仅管理员可操作"}), 403)
+    me, my_role = _ua_me()
     perms = load_permissions()
     accounts = _read_htpasswd()
     titles = _tab_titles()
+    grantable = _ua_my_tabs(me) if my_role == UA_ROLE_SUBADMIN else _all_tab_keys()
     rows = []
     for name in sorted(set(perms) | set(accounts), key=lambda x: (x != UA_ADMIN, x)):
         p = perms.get(name)
         tabs = p.get("tabs", []) if isinstance(p, dict) else (p if isinstance(p, list) else [])
         is_admin = (name == UA_ADMIN)
+        r_role = UA_ADMIN if is_admin else (
+            UA_ROLE_SUBADMIN if isinstance(p, dict) and p.get("role") == UA_ROLE_SUBADMIN else "user")
         if is_admin:
             tabs = ["*"]
+        # 可编辑性：admin 可编所有非内置账号；subadmin 只能编普通用户且不能编自己
+        editable = (my_role == UA_ADMIN and not is_admin) or (
+            my_role == UA_ROLE_SUBADMIN and r_role == "user" and name != me)
         rows.append({
             "user": name,
             "tabs": list(tabs),
             "is_admin": is_admin,
+            "role": r_role,
+            "editable": editable,
             "export": is_admin or _can_export(name),
             "has_password": name in accounts,
         })
     return jsonify({"ok": True, "rows": rows,
-                    "tabs": [{"key": k, "title": titles.get(k, k)} for k in _all_tab_keys()]})
+                    "me": {"user": me, "role": my_role},
+                    "tabs": [{"key": k, "title": titles.get(k, k)} for k in grantable]})
 
 
 @app.route("/api/users-account", methods=["POST"])
 def api_users_account_save():
-    """新增用户 / 修改 Tab 权限 / 重置密码。密码留空表示不改。"""
-    if not _ua_admin_only():
+    """新增用户 / 修改 Tab 权限 / 重置密码 / 设置角色。密码留空表示不改。
+
+    2026-11-23 三级角色：
+      admin    ：全部能力（含新增/删除/改密/升降级）
+      subadmin ：只能改「普通用户」的 tabs/export；不能新增、不能改密、不能设角色、
+                 不能碰 admin/其他子管理员/自己，且 tabs 必须是自己拥有的子集
+    """
+    me, my_role = _ua_me()
+    if my_role not in (UA_ADMIN, UA_ROLE_SUBADMIN):
         return make_response(jsonify({"ok": False, "error": "仅管理员可操作"}), 403)
     body = request.get_json(silent=True) or {}
     name = (body.get("user") or "").strip()
     tabs = body.get("tabs")
     password = body.get("password") or ""
+    want_role = body.get("role")
     if isinstance(tabs, str):
         tabs = [t for t in (x.strip() for x in tabs.split(",")) if t]
 
@@ -1839,6 +1918,30 @@ def api_users_account_save():
     accounts = _read_htpasswd()
     exists = (name in perms) or (name in accounts)
     is_admin = (name == UA_ADMIN)
+    target_role = _ua_role_of(name)
+
+    # ── 子管理员边界（全部在后端拦，不靠前端藏按钮）──
+    if my_role == UA_ROLE_SUBADMIN:
+        if want_role not in (None, ""):
+            return jsonify({"ok": False, "error": "子管理员不能修改角色"})
+        if not exists:
+            return jsonify({"ok": False, "error": "子管理员不能新增用户"})
+        if name == me:
+            return jsonify({"ok": False, "error": "不能修改自己的权限"})
+        if is_admin:
+            return jsonify({"ok": False, "error": "不能修改内置管理员"})
+        if target_role == UA_ROLE_SUBADMIN:
+            return jsonify({"ok": False, "error": "不能修改其他子管理员"})
+        if password:
+            return jsonify({"ok": False, "error": "子管理员不能重置密码"})
+
+    # 角色变更：仅 admin 可设；未传时沿用现有角色（避免只改 Tab 把人静默降级）
+    if is_admin:
+        effective_role = None
+    elif my_role == UA_ADMIN and want_role in ("user", UA_ROLE_SUBADMIN):
+        effective_role = want_role
+    else:
+        effective_role = target_role if target_role != UA_ADMIN else None
 
     # 密码：新用户必填；admin 已有密码时留空=不改
     need_pw = (not exists) or (not is_admin and name not in accounts)
@@ -1859,6 +1962,16 @@ def api_users_account_save():
         if unknown:
             return jsonify({"ok": False, "error": f"未知 Tab: {', '.join(unknown)}"})
         tabs = [t for t in tabs if t != "*"]        # 非 admin 不允许通配全部
+        # 子管理员：只能授予自己拥有的 Tab（防扩权）
+        if my_role == UA_ROLE_SUBADMIN:
+            mine = set(_ua_my_tabs(me))
+            over = [t for t in tabs if t not in mine]
+            if over:
+                return jsonify({"ok": False, "error": f"无权授予这些 Tab: {', '.join(over)}"})
+            # 超出她管理范围的原有权限：原样保留，避免“看不见就被静默删掉”
+            old_tabs = perms.get(name, {}).get("tabs", []) if isinstance(perms.get(name), dict) else []
+            keep = [t for t in old_tabs if t not in mine]
+            tabs = keep + [t for t in tabs if t not in keep]
 
     # 导出开关（2026-11-20）：admin 恒 True；未传该字段时沿用旧值，
     # 避免只改密码时把已有导出权限冲掉。
@@ -1878,8 +1991,11 @@ def api_users_account_save():
         except Exception as e:
             return jsonify({"ok": False, "error": f"写入登录密码失败: {e}"})
 
-    # 2) 写权限文件（admin 恒为 *，不做实体列表，避免误导）
-    perms[name] = {"tabs": tabs, "export": can_export}
+    # 2) 写权限文件（admin 恒为 *；role 只在 subadmin 时落盘，保持 JSON 干净）
+    rec = {"tabs": tabs, "export": can_export}
+    if effective_role == UA_ROLE_SUBADMIN:
+        rec["role"] = UA_ROLE_SUBADMIN
+    perms[name] = rec
     perms[UA_ADMIN] = {"tabs": ["*"], "export": True}
     try:
         _locked_write_json(PERMISSIONS_FILE, perms)
@@ -1893,12 +2009,16 @@ def api_users_account_save():
         return jsonify({"ok": False, "error": "校验失败：登录账号未落盘"})
     if back_perm.get("tabs") != tabs or bool(back_perm.get("export")) != can_export:
         return jsonify({"ok": False, "error": "校验失败：权限未落盘"})
+    if not is_admin and back_perm.get("role", "user") != (effective_role or "user"):
+        return jsonify({"ok": False, "error": "校验失败：角色未落盘"})
 
-    _ua_audit("save", name, {"tabs": tabs, "export": can_export,
-                             "password_changed": bool(password), "created": not exists})
-    logger.info("UA_SAVE user=%s created=%s pw=%s tabs=%d export=%s",
-                name, not exists, bool(password), len(tabs), can_export)
+    _ua_audit("save", name, {"tabs": tabs, "export": can_export, "role": effective_role or "user",
+                             "password_changed": bool(password), "created": not exists,
+                             "operator_role": my_role})
+    logger.info("UA_SAVE by=%s(%s) user=%s created=%s pw=%s tabs=%d export=%s role=%s",
+                me, my_role, name, not exists, bool(password), len(tabs), can_export, effective_role)
     return jsonify({"ok": True, "user": name, "tabs": tabs, "export": can_export,
+                    "role": effective_role or "user",
                     "created": not exists, "password_changed": bool(password)})
 
 
@@ -2880,7 +3000,7 @@ def sync_schedule_info():
 @app.route("/api/sync/status")
 def api_sync_status():
     user = request.headers.get("X-Remote-User", "") or "admin"
-    if user != "admin":
+    if not _is_manager(user):
         return make_response(jsonify({"ok": False, "error": "无权限"}), 403)
     tasks = []
     for key, cfg in SYNC_TASKS.items():
@@ -2899,7 +3019,7 @@ def api_sync_status():
 @app.route("/api/sync", methods=["POST"])
 def api_sync():
     user = request.headers.get("X-Remote-User", "") or "admin"
-    if user != "admin":
+    if not _is_manager(user):
         return make_response(jsonify({"ok": False, "error": "仅管理员可同步"}), 403)
     key = request.args.get("task", "")
     if key not in SYNC_TASKS:
@@ -2926,9 +3046,9 @@ def api_sync():
 
 @app.route("/api/synclog")
 def api_synclog():
-    """同步日志（系统 Tab，仅 admin）：读 sync_runs，全部同步任务的批次记录"""
+    """同步日志（系统 Tab，admin/subadmin）：读 sync_runs，全部同步任务的批次记录"""
     user = request.headers.get("X-Remote-User", "") or "admin"
-    if user != "admin":
+    if not _is_manager(user):
         return make_response(jsonify({"ok": False, "error": "无权限"}), 403)
     page = max(1, int(request.args.get("page", "1") or "1"))
     page_size = min(200, max(1, int(request.args.get("page_size", "50") or "50")))
@@ -3071,10 +3191,22 @@ ID_LOCK_PATH = "/tmp/shb_identity_switch.lock"
 ID_AUTH_JOBS: dict = {}
 ID_LOCK_TTL = 35 * 60  # 授权等待锁最长存活秒数
 
+# ── 身份↔钉钉映射（2026-11-23 新增，方案第一+二档）──
+# identity_dingtalk.json 是「钉钉userId → shb-cli profile」的唯一真相：
+#   MCP server 每次调用按 mtime 热加载它 → 加人/撤人立即生效，无需重启 gateway。
+# 钉钉 userId 必须一律以**字符串**存储：
+#   2026-11-19 事故 = 白名单被写成数字，前导零丢失 + 浮点精度改写，精确匹配全部失效。
+IDENTITY_MAP_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "shb-mcp", "identity_dingtalk.json"))
+OPENCLAW_CFG_PATH = "/root/.openclaw/openclaw.json"
+SHB_ID_ACCOUNT = "shb-agent"                    # 钉钉账号 id（发链接用它）
+OPENCLAW_BIN = "/usr/bin/openclaw"
+ID_PROFILE_RE = re.compile(r"^emp_[a-z0-9_]{2,20}$")
+ID_DD_UID_RE = re.compile(r"^[0-9]{6,20}$")
+
 
 def _id_admin_only():
-    user = request.headers.get("X-Remote-User", "") or "admin"
-    return user == "admin"
+    """身份管理访问门禁：admin 或 subadmin（2026-11-23 hunter 明确要求子管理员可完整操作）"""
+    return _is_manager()
 
 
 def _id_backup():
@@ -3145,6 +3277,182 @@ def _id_active_job():
     return None, None
 
 
+def _id_load_map():
+    """读身份映射文件；缺失/损坏时返回空结构（不抛错，避免整页打不开）"""
+    try:
+        with open(IDENTITY_MAP_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        d.setdefault("profiles", {})
+        d.setdefault("names", {})
+        return d
+    except Exception:
+        return {"profiles": {}, "names": {}}
+
+
+def _id_save_map(d):
+    """原子写身份映射（带时间戳备份）。条目一律转字符串，防止前导零/精度丢失。"""
+    out = {
+        "_comment": d.get("_comment") or
+                    "钉钉userId -> shb-cli profile 映射。由 shb-web 身份管理页维护；MCP 每次调用按 mtime 热加载。",
+        "_updated": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "profiles": {str(k).strip(): str(v).strip() for k, v in (d.get("profiles") or {}).items()},
+        "names": {str(k).strip(): str(v).strip() for k, v in (d.get("names") or {}).items()},
+    }
+    if os.path.exists(IDENTITY_MAP_PATH):
+        ts = datetime.now().strftime("%Y%m%d%H%M%S")
+        shutil.copy2(IDENTITY_MAP_PATH, f"{IDENTITY_MAP_PATH}.bak-{ts}")
+    tmp = IDENTITY_MAP_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, IDENTITY_MAP_PATH)
+    return out
+
+
+def _id_read_openclaw():
+    with open(OPENCLAW_CFG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _id_allow_entries():
+    """返回 (allowFrom, groupAllowFrom, 非字符串条目数)
+
+    非字符串计数是 2026-11-19 那类事故的哨兵：一旦 >0，精确匹配必错。
+    """
+    try:
+        cfg = _id_read_openclaw()
+        acc = ((cfg.get("channels") or {}).get("dingtalk-connector") or {}).get("accounts") or {}
+        me = acc.get(SHB_ID_ACCOUNT) or {}
+        a = me.get("allowFrom") or []
+        g = me.get("groupAllowFrom") or []
+        bad = sum(1 for x in list(a) + list(g) if not isinstance(x, str))
+        return [str(x) for x in a], [str(x) for x in g], bad
+    except Exception as e:
+        logger.error("ID_ALLOW_READ_FAIL %s", e)
+        return [], [], 0
+
+
+def _id_cred_profiles():
+    """credentials.json 里已存在的 token_ref 集合"""
+    try:
+        with open(ID_CRED_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return set((d.get("entries") or {}).keys())
+    except Exception:
+        return set()
+
+
+def _id_profile_to_uid(mp):
+    out = {}
+    for uid, prof in (mp or {}).items():
+        if uid and prof:
+            out[str(prof)] = str(uid)
+    return out
+
+
+def _id_status(name, uid, allow, allow_bad, prof, creds):
+    """单行状态判定（纯文件读取，不调 CLI，保证页面秒开）"""
+    if allow_bad:
+        return "白名单类型异常", "白名单里存在非字符串条目，精确匹配会失效（2026-11-19 事故形态）"
+    if not uid:
+        return "未配置钉钉ID", "未登记钉钉 userId，无法主动发送授权链接"
+    if uid not in allow:
+        return "白名单缺失", "已登记钉钉ID，但不在账号白名单，私聊会被拦截"
+    tref = (prof.get("token_ref") or "").strip()
+    if not tref or tref not in creds:
+        return "待授权", "无有效令牌，需生成授权链接由本人确认"
+    return "正常", ""
+
+
+def _id_write_cfg(cfg):
+    """原子写 shb-cli config.json（写前已由调用方备份）"""
+    tmp = ID_CFG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, ID_CFG_PATH)
+
+
+def _id_send_link(profile, url):
+    """把授权链接主动发到该身份本人的钉钉私聊（SOP：链接只发本人、必须 Markdown 才可点）"""
+    m = _id_load_map()
+    uid = _id_profile_to_uid(m.get("profiles") or {}).get(profile)
+    if not uid:
+        return {"sent": False, "reason": "no_userid", "message": "该身份未登记钉钉 userId"}
+    name = (m.get("names") or {}).get(uid) or profile
+    text = (
+        f"{name}你好，这是「售后宝-龙虾」的使用授权链接，"
+        "请点击并用你自己的 SHB（售后宝）账号完成授权：\n\n"
+        f"[点此完成授权]({url})\n\n"
+        "链接只发给你本人，请勿转发；生成后请尽快点击（等待窗口约 30 分钟）。\n"
+        "授权成功后即可私聊「售后宝-龙虾」查询和创建工单。"
+    )
+    cmd = [OPENCLAW_BIN, "message", "send",
+           "--channel", "dingtalk-connector", "--account", SHB_ID_ACCOUNT,
+           "--target", uid, "--message", text]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    except Exception as e:
+        return {"sent": False, "reason": "error", "message": str(e)}
+    if p.returncode != 0:
+        tail = ((p.stderr or "") + (p.stdout or "")).strip()[-300:]
+        logger.error("ID_SEND_LINK_FAIL profile=%s rc=%s %s", profile, p.returncode, tail)
+        return {"sent": False, "reason": "cli_failed", "message": tail}
+    logger.info("ID_SEND_LINK ok profile=%s -> %s(%s)", profile, name, uid)
+    return {"sent": True, "target": uid, "name": name}
+
+
+def _id_sync_allow(uid, add=True):
+    """把钉钉 userId 写进/移出 shb-agent 的 allowFrom + groupAllowFrom（全字符串）。
+
+    用 openclaw config patch --replace-path 整数组替换（不递归合并），
+    保留其他账号与其他字段；写后回读校验，不通过则从备份回滚。
+    """
+    try:
+        cfg = _id_read_openclaw()
+        acc = ((cfg.get("channels") or {}).get("dingtalk-connector") or {}).get("accounts") or {}
+        me = acc.get(SHB_ID_ACCOUNT) or {}
+        cur_a = [str(x) for x in (me.get("allowFrom") or [])]
+        cur_g = [str(x) for x in (me.get("groupAllowFrom") or [])]
+    except Exception as e:
+        return False, f"读取配置失败: {e}"
+
+    def _apply(lst):
+        if add:
+            return lst if uid in lst else lst + [uid]
+        return [x for x in lst if x != uid]
+
+    new_a, new_g = _apply(cur_a), _apply(cur_g)
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    bak = f"{OPENCLAW_CFG_PATH}.bak-{ts}-identity-allow"
+    shutil.copy2(OPENCLAW_CFG_PATH, bak)
+
+    patch = {"channels": {"dingtalk-connector": {"accounts": {SHB_ID_ACCOUNT: {
+        "allowFrom": new_a, "groupAllowFrom": new_g}}}}}
+    base = f"channels.dingtalk-connector.accounts.{SHB_ID_ACCOUNT}"
+    cmd = [OPENCLAW_BIN, "config", "patch", "--stdin",
+           "--replace-path", f"{base}.allowFrom",
+           "--replace-path", f"{base}.groupAllowFrom"]
+    try:
+        p = subprocess.run(cmd, input=json.dumps(patch, ensure_ascii=False),
+                           capture_output=True, text=True, timeout=90)
+    except Exception as e:
+        return False, f"执行配置写入失败: {e}"
+    if p.returncode != 0:
+        return False, f"配置写入失败: {((p.stderr or p.stdout) or '').strip()[-300:]}"
+
+    a2, g2, bad2 = _id_allow_entries()
+    expect_ok = (uid in a2) if add else (uid not in a2)
+    if bad2 or a2 != new_a or g2 != new_g or not expect_ok:
+        shutil.copy2(bak, OPENCLAW_CFG_PATH)
+        _id_audit({"action": "identity_allow_sync", "operator": "admin", "target": uid,
+                   "status": "verify_failed_rollback", "backup": bak})
+        return False, "写入后校验未通过，已回滚到写入前配置"
+
+    _id_audit({"action": "identity_allow_sync", "operator": "admin", "target": uid,
+               "status": "added" if add else "removed", "backup": bak})
+    return True, ""
+
+
 @app.route("/api/identity/list")
 def api_identity_list():
     if not _id_admin_only():
@@ -3155,18 +3463,48 @@ def api_identity_list():
         return jsonify({"ok": False, "error": f"读取配置失败: {e}"})
     cur = cfg.get("current_profile") or "default"
     profs = cfg.get("profiles") or {}
+
+    m = _id_load_map()
+    mp = m.get("profiles") or {}
+    mn = m.get("names") or {}
+    uid_of = _id_profile_to_uid(mp)
+    allow, gallow, allow_bad = _id_allow_entries()
+    cs = _id_cred_profiles()
+
     rows = []
     for name, p in profs.items():
         p = p or {}
+        uid = uid_of.get(name) or ""
+        status, tip = _id_status(name, uid, allow, allow_bad, p, cs)
         rows.append({
             "profile": name,
-            "显示名": p.get("display_name") or name,
+            "显示名": p.get("display_name") or mn.get(uid) or name,
+            "钉钉userId": uid,
             "最后登录": (p.get("last_login_at") or "")[:19].replace("T", " "),
             "当前": "★" if name == cur else "",
+            "状态": status,
+            "状态说明": tip,
         })
-    rows.sort(key=lambda r: (r["当前"] == "", r["显示名"]))
+
+    # 幽灵映射：映射指向了 config.json 里不存在的 profile（秦召军 2026-11-02 那笔旧账就是这种）
+    for uid, prof in mp.items():
+        if prof and prof not in profs:
+            rows.append({
+                "profile": prof,
+                "显示名": mn.get(uid) or prof,
+                "钉钉userId": uid,
+                "最后登录": "",
+                "当前": "",
+                "状态": "幽灵映射",
+                "状态说明": f"映射指向不存在的 profile「{prof}」，需补建 profile 或清除映射",
+            })
+
+    rows.sort(key=lambda r: (r["当前"] == "", r["状态"] != "正常", r["显示名"]))
+    for i, r in enumerate(rows, 1):
+        r["序号"] = i
     busy, _job = _id_active_job()
-    return jsonify({"ok": True, "current": cur, "rows": rows, "waiting": busy or ""})
+    return jsonify({"ok": True, "current": cur, "rows": rows, "waiting": busy or "",
+                    "allow_bad": allow_bad, "allow_count": len(allow)})
 
 
 @app.route("/api/identity/switch", methods=["POST"])
@@ -3267,8 +3605,17 @@ def api_identity_authlink():
         pass
     _id_audit({"action": "identity_authlink", "operator": "admin", "target": target,
                "status": "issued" if url else "no_url"})
+
+    # ★ 2026-11-23：生成后立即主动发钉钉（失败不影响链接本身，前端降到手动复制）
+    send = {"sent": False, "reason": "no_url", "message": "未取到链接"}
+    if url:
+        send = _id_send_link(target, url)
+        _id_audit({"action": "identity_send_link", "operator": "admin", "target": target,
+                   "status": "sent" if send.get("sent") else "failed",
+                   "reason": send.get("reason", ""), "to": send.get("target", "")})
+
     return jsonify({"ok": True, "profile": target, "url": url,
-                    "status": "waiting" if url else "starting"})
+                    "status": "waiting" if url else "starting", "send": send})
 
 
 @app.route("/api/identity/authstatus")
@@ -3321,6 +3668,211 @@ def api_identity_cancel():
     _id_audit({"action": "identity_authlink", "operator": "admin", "target": target,
                "status": "cancelled"})
     return jsonify({"ok": True})
+
+
+@app.route("/api/identity/add", methods=["POST"])
+def api_identity_add():
+    """新增一个售后宝身份（第一+二档合成一步）
+
+    顺序刻意如此：先写映射 → 再建 profile 占位 → 最后放行白名单。
+    因为 MCP 对「未登记的钉钉 userId」会回落 default（= 管理员权限），
+    必须先有映射才能放人进来，避免出现「放行但无映射」的越权窗口。
+    """
+    if not _id_admin_only():
+        return make_response(jsonify({"ok": False, "error": "仅管理员可操作"}), 403)
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    uid = (body.get("userid") or "").strip()
+    profile = (body.get("profile") or "").strip()
+    phone = (body.get("phone") or "").strip()
+    note = (body.get("note") or "").strip()
+
+    if not name or len(name) > 20:
+        return jsonify({"ok": False, "error": "姓名必填，且不超过 20 字"})
+    if not ID_DD_UID_RE.match(uid):
+        return jsonify({"ok": False, "error": "钉钉 userId 必须是 6-20 位数字（纯字符串，不要带空格）"})
+    if not ID_PROFILE_RE.match(profile):
+        return jsonify({"ok": False, "error": "profile 标识格式应为 emp_ + 小写字母/数字/下划线，2-20 位"})
+
+    try:
+        cfg = _id_read_cfg()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"读取配置失败: {e}"})
+    profs = cfg.get("profiles") or {}
+    if profile in profs:
+        return jsonify({"ok": False, "error": f"profile 已存在: {profile}"})
+
+    m = _id_load_map()
+    mp = m.get("profiles") or {}
+    if uid in mp:
+        return jsonify({"ok": False, "error": f"该钉钉 userId 已绑定身份: {mp[uid]}"})
+    if profile in set(mp.values()):
+        return jsonify({"ok": False, "error": f"该 profile 已被其他钉钉账号绑定: {profile}"})
+
+    made = _id_backup()
+
+    # 1) 先写映射（fail closed 优先）
+    try:
+        mp[uid] = profile
+        m["profiles"] = mp
+        names = m.get("names") or {}
+        names[uid] = name
+        m["names"] = names
+        _id_save_map(m)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"写入身份映射失败: {e}"})
+
+    # 2) 建 profile 占位（继承 default 模板的租户/域名/环境，token 留空等授权回填）
+    try:
+        tpl = profs.get("default") or {}
+        profs[profile] = {
+            "name": profile,
+            "environment": tpl.get("environment") or "dingtalk",
+            "domain": tpl.get("domain") or "",
+            "token_ref": "",
+            "token_store": "file",
+            "tenant_id": tpl.get("tenant_id") or "",
+            "tenant_name": tpl.get("tenant_name") or "",
+            "user_id": "",
+            "display_name": name,
+            "language": tpl.get("language") or "zh",
+        }
+        cfg["profiles"] = profs
+        _id_write_cfg(cfg)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"创建 profile 失败: {e}（映射已写入，请手工清理）"})
+
+    # 3) 放行白名单（字符串数组，写后回读校验）
+    ok, err = _id_sync_allow(uid, add=True)
+
+    _id_audit({"action": "identity_add", "operator": "admin", "target": profile,
+               "userid": uid, "name": name, "phone": phone, "note": note,
+               "status": "ok" if ok else "allow_sync_failed", "error": err, "backup": made})
+    if not ok:
+        return jsonify({"ok": False, "error": f"profile 与映射已建，但白名单同步失败：{err}"})
+
+    logger.info("IDENTITY_ADD profile=%s userid=%s name=%s", profile, uid, name)
+    return jsonify({"ok": True, "profile": profile, "userid": uid, "name": name,
+                    "message": "已创建，可立即生成授权链接"})
+
+
+@app.route("/api/identity/<path:profile>", methods=["DELETE"])
+def api_identity_delete(profile):
+    """删除一个售后宝身份（2026-11-23 hunter 要求）
+
+    顺序刻意如此：先进出白名单断入口 → 再删映射 → 最后删 profile。
+    反了会出现「能发消息但身份缺失」或「放行却没映射 → 回落 default 管理员权限」的窗口。
+    安全门禁：不能删 default，不能删当前生效身份。
+    """
+    if not _id_admin_only():
+        return make_response(jsonify({"ok": False, "error": "仅管理员可操作"}), 403)
+    profile = (profile or "").strip()
+    if not profile:
+        return jsonify({"ok": False, "error": "profile 不能为空"})
+    if profile == "default":
+        return jsonify({"ok": False, "error": "default 是内置默认身份（李刚），不可删除"})
+
+    try:
+        cfg = _id_read_cfg()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"读取配置失败: {e}"})
+    profs = cfg.get("profiles") or {}
+
+    m = _id_load_map()
+    mp = m.get("profiles") or {}
+    mn = m.get("names") or {}
+    uid = _id_profile_to_uid(mp).get(profile, "")
+
+    if profile not in profs and profile not in set(mp.values()):
+        return jsonify({"ok": False, "error": f"身份不存在: {profile}"})
+
+    cur = cfg.get("current_profile") or "default"
+    if profile == cur:
+        return jsonify({"ok": False, "error": f"「{profile}」是当前生效身份，不能删。请先切换到其他身份。"})
+
+    made = _id_backup()
+
+    # 0) 若该身份有正在等待的授权任务，先终止（避免残留进程/锁）
+    job = ID_AUTH_JOBS.pop(profile, None)
+    if job and job.get("proc") is not None and job["proc"].poll() is None:
+        try:
+            job["proc"].terminate()
+        except Exception:
+            pass
+    if os.path.exists(ID_LOCK_PATH):
+        try:
+            with open(ID_LOCK_PATH, "r", encoding="utf-8") as f:
+                if f.read().strip() == profile:
+                    os.remove(ID_LOCK_PATH)
+        except Exception:
+            pass
+
+    # 1) 先移出白名单（断掉入口）
+    allow_err = ""
+    if uid:
+        ok, err = _id_sync_allow(uid, add=False)
+        if not ok:
+            _id_audit({"action": "identity_delete", "operator": "admin", "target": profile,
+                       "userid": uid, "status": "abort_allow_sync", "error": err})
+            return jsonify({"ok": False, "error": f"移出白名单失败，已中止（未删任何东西）：{err}"})
+    else:
+        allow_err = "该身份未登记钉钉 userId，跳过白名单操作"
+
+    # 2) 删映射
+    removed_uid = ""
+    for u, p in list(mp.items()):
+        if p == profile:
+            removed_uid = u
+            mp.pop(u, None)
+            mn.pop(u, None)
+    try:
+        m["profiles"] = mp
+        m["names"] = mn
+        _id_save_map(m)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"白名单已移出，但删映射失败：{e}，请手工处理"})
+
+    # 3) 删 profile（连带清理孤立令牌）
+    token_ref = (profs.get(profile) or {}).get("token_ref") or ""
+    profs.pop(profile, None)
+    cfg["profiles"] = profs
+    try:
+        _id_write_cfg(cfg)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"白名单与映射已删，但删 profile 失败：{e}，请手工处理"})
+
+    if token_ref:
+        try:
+            with open(ID_CRED_PATH, "r", encoding="utf-8") as f:
+                cred = json.load(f)
+            if (cred.get("entries") or {}).pop(token_ref, None) is not None:
+                tmp = ID_CRED_PATH + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(cred, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, ID_CRED_PATH)
+        except Exception as e:
+            logger.error("ID_DELETE_CRED_CLEAN_FAIL %s", e)
+
+    # 4) 回读校验
+    try:
+        p2 = _id_read_cfg().get("profiles") or {}
+        m2 = _id_load_map()
+        a2, _g2, _bad = _id_allow_entries()
+        left = (profile in p2) or (profile in set((m2.get("profiles") or {}).values()))
+        still_allowed = bool(removed_uid) and (removed_uid in a2)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"删除后校验读盘失败：{e}"})
+
+    if left or still_allowed:
+        _id_audit({"action": "identity_delete", "operator": "admin", "target": profile,
+                   "userid": removed_uid, "status": "verify_failed",
+                   "left": left, "still_allowed": still_allowed})
+        return jsonify({"ok": False, "error": "删除后校验未通过（仍有残留），请检查配置"})
+
+    _id_audit({"action": "identity_delete", "operator": "admin", "target": profile,
+               "userid": removed_uid, "status": "ok", "backup": made, "note": allow_err})
+    logger.info("IDENTITY_DELETE profile=%s userid=%s", profile, removed_uid)
+    return jsonify({"ok": True, "profile": profile, "userid": removed_uid, "note": allow_err})
 
 
 @app.route("/health")

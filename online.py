@@ -2197,9 +2197,10 @@ def q_task_query(params, progress, deadline):
 
 
 # ── 问题工单（PAAS 表单）：列表口径 + 详情（2026-11-13 hunter 定）───────────
-# 列表只保留这 11 列；内容ID / 表单名称 / 无中文名的遗留字段一律不展示
+# 列表只保留这 12+1 列；内容ID / 表单名称 / 无中文名的遗留字段一律不展示
+# 2026-11-23 hunter 定：末列新增「备注留言」（流程日志里人工主动留言，机器状态记录不要）
 ISSUE_LIST_COLUMNS = ["编号", "项目编码", "数据状态", "当前节点", "创建时间", "问题描述", "紧急程度",
-                      "主责任人员", "处理方案", "完成日期", "处理结果", "客户"]
+                      "主责任人员", "处理方案", "完成日期", "处理结果", "客户", "备注留言"]
 # 客户字段（含关联客户的编号 relationDate.serialNumber）
 ISSUE_CUSTOMER_FIELD = "fieldYHr9khcoPm8KM4rL6Mcxi7xWAqUJY3CV"
 # 模板里已删除/弃用的遗留字段：老数据仍有值，接口不返回中文名，这里补上
@@ -2254,6 +2255,39 @@ def _issue_labels(force=False):
     labels.update(ISSUE_LEGACY_LABELS)
     ISSUE_FIELD_CACHE.update(ts=now, labels=labels, types=types)
     return labels, types
+
+
+def _issue_remark_text(biz_id):
+    """问题工单「备注留言」列取值（2026-11-23 hunter 定，详见 q_issue_tasks）
+
+    数据源 paas flow-log（逐单拉）→ nodeLogList[].processLogRemarkVOs：
+      · processLogRemarkVOs = 人工主动留言（如「郭颖 添加了备注: …」）→ 只取这些
+      · taskLogVOList = 系统节点流转记录（接受已提交/分配已提交…）→ 机器生成，一律不要
+      · processLogRemarkVOs 内 source≠1 的（实测 source=7）content 是 @名片 JSON
+        （{"corpId":…,"displayName":…}），无正文可读，同样剔除
+    输出：多条按时间正序全部拼接「留言人 MM-DD HH:MM：正文」；无留言返回空串。
+    """
+    d = cli(["paas", "flow-log", "--content-biz-id", str(biz_id), "-o", "raw"])
+    items = []
+    for n in d.get("nodeLogList") or []:
+        for rm in n.get("processLogRemarkVOs") or []:
+            if rm.get("source") != 1:
+                continue
+            text = (rm.get("originalContent") or "").strip()
+            if not text:
+                raw = (rm.get("content") or "").strip()
+                if not raw or (raw.startswith("{") and "displayName" in raw):
+                    continue
+                text = raw
+            if not text:
+                continue
+            who = (rm.get("createUser") or {}).get("displayName") or ""
+            ts = ts_any(rm.get("createTime"))
+            t = ts.strftime("%m-%d %H:%M") if ts else ""
+            body = ("%s %s：%s" % (who, t, text)) if t else ("%s：%s" % (who, text))
+            items.append((ts or datetime.min, body))
+    items.sort(key=lambda x: x[0])
+    return " ｜ ".join(b for _, b in items)
 
 
 def _issue_cell(v):
@@ -2394,6 +2428,21 @@ def q_issue_tasks(params, progress, deadline):
         _check(deadline, "问题工单")
 
     cust_map = _issue_customer_map(rows)
+    # 2026-11-23 hunter 定：逐单拉流程日志的人工留言填「备注留言」列。
+    # 并发 8 路（与工单详情同池）；单单失败只让该单留言为空，不拖垮整表。
+    remarks = {}
+    if rows:
+        def _one(r):
+            try:
+                return r.get("bizId"), _issue_remark_text(r.get("bizId"))
+            except Exception:
+                return r.get("bizId"), ""
+        with ThreadPoolExecutor(max_workers=min(WORKERS, len(rows))) as ex:
+            for bid, txt in ex.map(_one, rows):
+                remarks[bid] = txt
+                _check(deadline, "问题工单留言")
+        if progress:
+            progress("已取留言 %d 单" % len(remarks))
     out = []
     for r in rows:
         ct = str(r.get("createTime") or "")
@@ -2421,6 +2470,8 @@ def q_issue_tasks(params, progress, deadline):
             "是否完成流程": _issue_cell(r.get("field73exUHuTAu0xVTeyxlvMqXnkNuUvdueC")),
             "处理结果": _issue_cell(r.get("fieldzWP3auuCq1DGz4jcru9vQl2MRZfLKjHG")),
             "客户": _issue_cell(r.get(ISSUE_CUSTOMER_FIELD)),
+            # 2026-11-23 hunter 定：末列「备注留言」= 人工主动留言（机器状态记录已剔除）
+            "备注留言": remarks.get(r.get("bizId")) or "",
             "__id": r.get("bizId") or "",
         }
         if keyword:
@@ -2650,6 +2701,15 @@ def issue_detail(biz_id):
             others.append({"label": labels.get(f, f), "value": txt, "urls": urls})
     if others:
         sections.append({"name": "其他字段", "items": others})
+
+    # 2026-11-23 hunter 定：详情最末组「备注留言」= 人工主动留言（口径同列表列，
+    # 复用 _issue_remark_text；系统节点记录/@名片卡片已剔除）。有留言显示、无留言该组留空。
+    try:
+        remark = _issue_remark_text(biz_id)
+    except Exception:
+        remark = ""
+    sections.append({"name": "备注留言",
+                     "items": [{"label": "留言内容", "value": remark, "urls": []}]})
 
     return {"title": row.get("serialNumber") or labels.get("serialNumber") or "问题工单详情",
             "sections": sections}

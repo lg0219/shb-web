@@ -606,9 +606,11 @@ const ONLINE_FORMS = {
     {id:'olit_end', label:'创建日期至', type:'date', param:'date_end',
      tip:'按「创建时间」筛选，与「创建日期从」组成区间。默认今天。'},
     {id:'olit_state', label:'状态', type:'multiselect', param:'states',
-     tip:'按「数据状态」多选；全部不选=不限状态。默认不含「已完成」。',
-     options:['进行中','主责任部门处理','已完成'],
-     default:['进行中','主责任部门处理']}
+     tip:'按「数据状态」多选；默认勾选全部未完结状态，不含「已完成」（需要时勾上）。',
+     // 2026-11-23 hunter 定：原 options 只有 3 种，漏掉「分配相关部门/最终审核」导致查单不全；
+     // 现补齐为平台实际存在的 5 种，default 选 4 个未完结状态。
+     options:['分配相关部门','主责任部门处理','进行中','最终审核','已完成'],
+     default:['分配相关部门','主责任部门处理','进行中','最终审核']}
   ],
   // 2026-11-16 新增：工单管理（dataware 平台报表直读，图表页）
   // 时间过滤：快捷按钮只改下面两个日期框的值，再到后端改写每块图表的 dataRanges
@@ -1508,10 +1510,10 @@ function renderResultData(data) {  const tc = document.getElementById('table-con
       }
     }
     // 工单查询（2026-11-13）：创建时间/更新日期只显示到日，悬停仍显示完整时间
-    // 问题工单（2026-11-13 hunter 定）：编号只显示后三位，实际值不变，悬停看完整编号
+    // 问题工单：2026-11-13 hunter 曾定编号只显示后三位；2026-11-23 hunter 定：第一列完整显示工单号
     if (currentTab === 'ol:issue-tasks' && c === '编号') {
       const _no = String(_v || '');
-      return '<td title="' + esc(_no) + '" class="col-text">' + esc(_no.slice(-3)) + '</td>';
+      return '<td title="' + esc(_no) + '" class="col-text">' + esc(_no) + '</td>';
     }
     if (currentTab === 'ol:issue-tasks' && (c === '创建时间' || c === '完成日期')) {
       const _full2 = String(_v || '');
@@ -2305,9 +2307,9 @@ const ID_HELP_HTML = [
   '      <ol style="margin:0 0 0 18px;padding:0;color:#4b5563;font-size:13px;line-height:1.9">',
   '        <li>在列表中找到目标身份，点“切换”。</li>',
   '        <li>系统先探测该身份令牌。<b>有效</b>→ 直接切换，几秒完成。</li>',
-  '        <li><b>无效或已过期</b>→ 提示需先授权，点“立即生成授权链接”。</li>',
-  '        <li>把链接发给<b>该身份本人</b>，本人用自己账号确认。</li>',
-  '        <li>页面每 5 秒自动检查，授权成功后自动完成切换。</li>',
+  '        <li><b>无效或已过期</b>→ 直接点“生成授权链接”，系统会<b>自动发送到该身份本人的钉钉</b>。</li>',
+  '        <li>若自动发送失败（或本人未登记钉钉 userId），页面会给出链接和“复制链接”按钮，手动转发即可。</li>',
+  '        <li>页面每 5 秒自动检查；授权完成后<b>只更新该身份的令牌，不会改变当前生效身份</b>。要切换请另行点「切换」。</li>',
   '      </ol>',
   '    </div>',
   '    <div style="flex:1 1 320px;min-width:280px">',
@@ -2323,9 +2325,76 @@ const ID_HELP_HTML = [
   '        <li><b>链接有效期约 30 分钟。</b>过期或被顶号，重新生成即可。</li>',
   '      </ul>',
   '    </div>',
+  '    <div style="flex:1 1 320px;min-width:280px">',
+  '      <div style="font-weight:600;color:#00a884;margin-bottom:6px;font-size:13px">添加人员 / 状态含义</div>',
+  '      <ul style="margin:0 0 0 18px;padding:0;color:#4b5563;font-size:13px;line-height:1.9">',
+  '        <li>点右上角<b>“＋ 添加身份”</b>，填姓名、钉钉 userId、profile 标识即可。</li>',
+  '        <li>系统会一次完成：建 profile 占位 → 写身份映射 → 加入白名单 → 可马上生成链接。</li>',
+  '        <li><b>正常</b>：映射、白名单、令牌都齐了。</li>',
+  '        <li><b>待授权</b>：还没令牌，需本人点链接。</li>',
+  '        <li><b>白名单缺失</b>：有钉钉 ID 但没放行，私聊会被拦。</li>',
+  '        <li><b>幽灵映射</b>：映射指向的 profile 不存在，需补建或清理。</li>',
+  '        <li><b>白名单类型异常</b>：白名单被写成了数字（会丢前导零），匹配必错。</li>',
+  '      </ul>',
+  '    </div>',
   '  </div>',
   '</div>'
 ].join('');
+
+function idBadge(st, tip) {
+  const M = {'正常': ['#00a884', '#e8f8f3'], '待授权': ['#d97706', '#fef6e7'],
+             '未配置钉钉ID': ['#7f8c8d', '#f4f6f7'], '白名单缺失': ['#d63031', '#fdecea'],
+             '白名单类型异常': ['#d63031', '#fdecea'], '幽灵映射': ['#d63031', '#fdecea']};
+  const c = M[st] || ['#636e72', '#f4f6f7'];
+  return '<span title="' + esc(tip || '') + '" style="display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;white-space:nowrap;background:' + c[1] + ';color:' + c[0] + ';border:1px solid ' + c[0] + '55">' + esc(st) + '</span>';
+}
+
+function idCopy(text) {
+  const done = () => { const m = document.getElementById('id-msg'); if (m) m.textContent = '✓ 链接已复制到剪贴板'; };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(() => idCopyFallback(text, done));
+  } else { idCopyFallback(text, done); }
+}
+function idCopyFallback(text, ok) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta); ok();
+  } catch (e) { alert('复制失败，请手动选中链接复制\n' + text); }
+}
+
+function idToggleAdd(show) {
+  const box = document.getElementById('id-add-box');
+  if (!box) return;
+  box.style.display = show ? 'block' : 'none';
+  if (show) { const f = document.getElementById('id-add-name'); if (f) f.focus(); }
+}
+
+async function idSubmitAdd() {
+  const g = id => (document.getElementById(id) || {}).value || '';
+  const body = {
+    name: g('id-add-name').trim(),
+    userid: g('id-add-uid').trim(),
+    profile: g('id-add-profile').trim(),
+    phone: g('id-add-phone').trim(),
+    note: g('id-add-note').trim()
+  };
+  const msg = document.getElementById('id-add-msg');
+  if (!body.name) { if (msg) msg.textContent = '姓名必填'; return; }
+  if (!/^[0-9]{6,20}$/.test(body.userid)) { if (msg) msg.textContent = '钉钉 userId 必须是 6-20 位数字'; return; }
+  if (!/^emp_[a-z0-9_]{2,20}$/.test(body.profile)) { if (msg) msg.textContent = 'profile 标识格式：emp_ + 小写字母/数字/下划线（2-20 位）'; return; }
+  if (!confirm('确定新增身份「' + body.name + '」（' + body.profile + '）？\n将创建 profile 占位、写入映射并加入白名单。')) return;
+  if (msg) msg.textContent = '提交中...';
+  try {
+    const d = await (await fetch('/shb/api/identity/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    })).json();
+    if (!d.ok) { if (msg) msg.textContent = '✗ ' + (d.error || '新增失败'); return; }
+    if (msg) msg.textContent = '✓ 已创建，正在刷新...';
+    fetchIdentity();
+  } catch (e) { if (msg) msg.textContent = '网络错误：' + e.message; }
+}
 
 async function fetchIdentity() {
   const tc = document.getElementById('table-container');
@@ -2336,19 +2405,47 @@ async function fetchIdentity() {
     const d = await (await fetch('/shb/api/identity/list')).json();
     loading.style.display = 'none';
     if (!d.ok) { error.textContent = d.error || '读取失败'; error.style.display = 'block'; return; }
-    let html = '<div style="padding:12px 16px">当前生效身份：<b>' + esc(d.current) + '</b>';
-    if (d.waiting) html += '　<span style="color:#d63031">待授权中：' + esc(d.waiting) + '</span>';
+    let html = '<div style="padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+    html += '<span>当前生效身份：<b>' + esc(d.current) + '</b></span>';
+    if (d.waiting) html += '<span style="color:#d63031">待授权中：' + esc(d.waiting) + '</span>';
+    html += '<span style="flex:1"></span>';
+    html += '<button class="btn-save" onclick="idToggleAdd(true)">＋ 添加身份</button>';
     html += '</div>';
-    html += '<table><thead><tr><th>身份标识</th><th>显示名</th><th>最后登录</th><th>当前</th><th>操作</th></tr></thead><tbody>';
+    if (d.allow_bad) {
+      html += '<div style="margin:0 16px 10px;padding:10px 12px;border:1px solid #d63031;border-radius:6px;background:#fdecea;color:#b71c1c;font-size:13px">';
+      html += '⚠️ 白名单存在 <b>' + d.allow_bad + '</b> 个非字符串条目，精确匹配会失效（会导致本人在私聊里被拦截）。请尽快修正。</div>';
+    }
+    html += '<div id="id-add-box" style="display:none;margin:0 16px 14px;padding:14px;border:1px solid #dfe6e9;border-radius:8px;background:#fbfcfd">';
+    html += '<div style="font-weight:600;margin-bottom:10px;color:#2d3436">新增售后宝身份</div>';
+    html += '<div class="form-row" style="margin-bottom:12px">';
+    html += '<div class="form-group"><label>姓名 *</label><input id="id-add-name" placeholder="如 张三"></div>';
+    html += '<div class="form-group"><label>钉钉 userId *</label><input id="id-add-uid" placeholder="纯数字，如 0123456789012345" style="min-width:210px"></div>';
+    html += '<div class="form-group"><label>profile 标识 *</label><input id="id-add-profile" placeholder="emp_zhangsan"></div>';
+    html += '<div class="form-group"><label>手机号（选填）</label><input id="id-add-phone" placeholder="仅用于核对"></div>';
+    html += '<div class="form-group"><label>备注（选填）</label><input id="id-add-note"></div>';
+    html += '</div>';
+    html += '<div style="margin-top:10px;display:flex;gap:10px;align-items:center">';
+    html += '<button class="btn-save" onclick="idSubmitAdd()">提交</button>';
+    html += '<button class="btn-export" onclick="idToggleAdd(false)">取消</button>';
+    html += '<span id="id-add-msg" style="color:#636e72;font-size:13px"></span>';
+    html += '</div>';
+    html += '<div style="margin-top:8px;color:#95a5a6;font-size:12px">租户/域名/令牌等自动继承默认身份，无需填写；新增后需本人点击授权链接完成授权。</div>';
+    html += '</div>';
+    html += '<table><thead><tr><th style="width:56px">序号</th><th>钉钉 userId</th><th>身份标识</th><th>显示名</th><th>最后登录</th><th>当前</th><th>映射状态</th><th>操作</th></tr></thead><tbody>';
     d.rows.forEach(r => {
       const cur = r['当前'] === '★';
-      html += '<tr><td class="col-text">' + esc(r.profile) + '</td><td>' + esc(r['显示名']) + '</td><td>' + esc(r['最后登录']) + '</td><td>' + (cur ? '✓' : '') + '</td><td>';
-      if (cur) {
-        html += '—';
-      } else {
-        html += '<button class="btn-query" onclick="idSwitch(\'' + r.profile + '\')">切换</button> ';
-        html += '<button class="btn-save" onclick="idAuth(\'' + r.profile + '\')">生成授权链接</button>';
-      }
+      const uidCell = r['钉钉userId'] ? '<td class="col-text" style="font-family:monospace">' + esc(r['钉钉userId']) + '</td>' : '<td style="color:#b2bec3">—</td>';
+      html += '<tr><td>' + r['序号'] + '</td>' + uidCell +
+              '<td class="col-text">' + esc(r.profile) + '</td>' +
+              '<td>' + esc(r['显示名']) + '</td>' +
+              '<td>' + esc(r['最后登录']) + '</td>' +
+              '<td>' + (cur ? '✓' : '') + '</td>' +
+              '<td>' + idBadge(r['状态'], r['状态说明']) + '</td><td>';
+      // 2026-11-23 hunter 要求：当前生效身份也要能生成授权链接（只去掉“切换”）
+      const needAuth = (r['状态'] === '待授权' || r['状态'] === '未配置钉钉ID' || r['状态'] === '幽灵映射');
+      if (!cur && !needAuth) html += '<button class="btn-query" onclick="idSwitch(\'' + r.profile + '\')">切换</button> ';
+      if (r['状态'] !== '未配置钉钉ID') html += '<button class="btn-save" onclick="idAuth(\'' + r.profile + '\')">生成授权链接</button>';
+      if (!cur && r.profile !== 'default') html += ' <button class="btn-export" style="background:#d9a300;border-color:#d9a300;color:#fff;font-weight:600" onclick="idDelete(\'' + r.profile + '\',\'' + encodeURIComponent(r['显示名'] || '') + '\')">删除</button>';
       html += '</td></tr>';
     });
     html += '</tbody></table>';
@@ -2372,7 +2469,14 @@ async function idSwitch(profile, skipConfirm) {
       body: JSON.stringify({profile: profile})
     })).json();
     if (d.ok && d.status === 'switched') { if (msg) msg.textContent = '已切换到 ' + d.current; fetchIdentity(); return; }
-    if (d.ok && d.status === 'already') { if (msg) msg.textContent = 'ℹ 已是当前身份'; return; }
+    if (d.ok && d.status === 'already') {
+      // 2026-11-23 修复：当前身份重新授权后，接口回 already，旧代码只改文字不刷列表 →
+      // 页面看起来“没变化”。这里强制重拉列表（DOM 会被重建，提示要重建后再写）。
+      await fetchIdentity();
+      const m2 = document.getElementById('id-msg');
+      if (m2) m2.textContent = '✓ 授权已完成（当前身份，无需切换）';
+      return;
+    }
     if (d.ok && d.status === 'need_auth') {
       if (msg) {
         msg.innerHTML = '' + esc(d.message) + '　';
@@ -2389,7 +2493,7 @@ async function idSwitch(profile, skipConfirm) {
 
 async function idAuth(profile) {
   const msg = document.getElementById('id-msg'), linkBox = document.getElementById('id-link');
-  if (msg) msg.textContent = '正在生成授权链接...';
+  if (msg) msg.textContent = '正在生成授权链接' + (profile ? '（' + profile + '）' : '') + '...';
   if (linkBox) linkBox.innerHTML = '';
   try {
     const d = await (await fetch('/shb/api/identity/authlink', {
@@ -2398,19 +2502,33 @@ async function idAuth(profile) {
     })).json();
     if (!d.ok) { if (msg) msg.textContent = '' + (d.error || '生成失败'); return; }
     if (!d.url) { if (msg) msg.textContent = '未取到链接，请稍后重试'; return; }
-    if (msg) msg.textContent = '链接已生成，仅发给本人，约 30 分钟内有效';
+
+    const s = d.send || {};
+    if (msg) {
+      if (s.sent) msg.innerHTML = '✓ 已通过钉钉发给 <b>' + esc(s.name || '') + '</b>，请让本人点击并授权（等待约 30 分钟）；也可直接复制下方链接转发。';
+      else if (s.reason === 'no_userid') msg.textContent = '⚠ 该身份未登记钉钉 userId，无法自动发送。请复制下方链接，手动发给本人。';
+      else msg.textContent = '⚠ 钉钉发送失败（' + (s.message || s.reason || '未知原因') + '）。请复制下方链接，手动发给本人。';
+    }
+
     if (linkBox) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'background:#f8f9fa;border:1px solid #dfe6e9;border-radius:6px;padding:10px;font-size:13px;margin-bottom:8px';
       const a = document.createElement('a');
       a.href = d.url; a.target = '_blank'; a.textContent = d.url;
       a.style.wordBreak = 'break-all';
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'background:#f8f9fa;border:1px solid #dfe6e9;border-radius:6px;padding:10px;font-size:13px;margin-bottom:8px';
       wrap.appendChild(a);
+
+      const bar = document.createElement('div');
+      bar.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap';
+      const cp = document.createElement('button');
+      cp.className = 'btn-save'; cp.textContent = '复制链接';
+      cp.onclick = () => idCopy(d.url);
       const cb = document.createElement('button');
       cb.className = 'btn-export'; cb.textContent = '取消等待';
       cb.onclick = () => idCancel(profile);
+      bar.appendChild(cp); bar.appendChild(cb);
       linkBox.appendChild(wrap);
-      linkBox.appendChild(cb);
+      linkBox.appendChild(bar);
     }
     idPoll(profile);
   } catch(e) { if (msg) msg.textContent = '网络错误：' + e.message; }
@@ -2430,8 +2548,13 @@ async function idPoll(profile) {
       continue;
     }
     if (d.status === 'success') {
-      if (msg) msg.textContent = '授权成功，正在切换身份...';
-      await idSwitch(profile, true);
+      // 🔴 2026-11-23 bug 修复：授权成功只代表「该身份令牌已更新」，
+      // 绝不能自动切换全局身份（旧代码调了 idSwitch，导致 default 被替掉）。
+      // 切换全局身份只能由用户主动点「切换」按钮触发。
+      if (msg) msg.textContent = '✓ 授权完成，正在刷新...';
+      await fetchIdentity();
+      const m2 = document.getElementById('id-msg');
+      if (m2) m2.textContent = '✓ 授权完成：该身份的令牌已更新，当前生效身份未变（如需切换请点「切换」）。';
       return;
     }
     if (d.status === 'timeout' || d.status === 'none') {
@@ -2452,6 +2575,25 @@ async function idCancel(profile) {
     if (msg) msg.textContent = '已取消等待';
     if (linkBox) linkBox.innerHTML = '';
   } catch(e) { if (msg) msg.textContent = '取消失败：' + e.message; }
+}
+
+async function idDelete(profile, name) {
+  name = name ? decodeURIComponent(name) : profile;
+  if (!confirm('确定删除身份「' + (name || profile) + '」（' + profile + '）？\n\n将依次：① 移出钉钉白名单 → ② 删除身份映射 → ③ 删除 profile 及其令牌。\n删除前会自动备份，但操作不可撤销。')) return;
+  const typed = prompt('为防止误删，请输入 profile 标识确认删除：\n' + profile);
+  if (typed === null) return;
+  if (typed.trim() !== profile) { alert('输入不一致，已取消删除'); return; }
+  const msg = document.getElementById('id-msg');
+  if (msg) msg.textContent = '正在删除 ' + profile + ' ...';
+  try {
+    const d = await (await fetch('/shb/api/identity/' + encodeURIComponent(profile), { method: 'DELETE' })).json();
+    if (!d.ok) { if (msg) msg.textContent = '✗ ' + (d.error || '删除失败'); return; }
+    await fetchIdentity();
+    const m2 = document.getElementById('id-msg');
+    if (m2) m2.textContent = '✓ 已删除「' + (name || profile) + '」（白名单、映射、profile 已清理）' + (d.note ? '（' + d.note + '）' : '');
+  } catch (e) {
+    if (msg) msg.textContent = '网络错误：' + e.message;
+  }
 }
 
 function switchToTab(tab) {
@@ -2475,7 +2617,7 @@ function switchToTab(tab) {
 
 // ══ 账号管理（登录账号 + Tab 权限）══
 // uaRows：当前列表；uaTabsMeta：全部可选 Tab（key + 中文名）；uaEditing：正在编辑的用户名（null=新增）
-let uaRows = [], uaTabsMeta = [], uaEditing = null;
+let uaRows = [], uaTabsMeta = [], uaEditing = null, uaMe = { user: 'admin', role: 'admin' };
 
 function switchToUsersAccount() {
   isUsersAccountTab = true;
@@ -2511,7 +2653,7 @@ async function fetchUsersAccount() {
     const d = await uaFetchJson('/shb/api/users-account');
     loading.style.display = 'none';
     if (!d.ok) { error.textContent = d.error || '加载失败'; error.style.display = 'block'; return; }
-    uaRows = d.rows || []; uaTabsMeta = d.tabs || [];
+    uaRows = d.rows || []; uaTabsMeta = d.tabs || []; uaMe = d.me || { user: 'admin', role: 'admin' };
     renderUsersAccount();
   } catch (e) {
     loading.style.display = 'none';
@@ -2526,10 +2668,13 @@ function uaTabTitle(key) {
 
 function renderUsersAccount() {
   const tc = document.getElementById('table-container');
+  const isAdmin = (uaMe.role === 'admin');
   let html = '<div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 10px">';
   html += '<div style="font-size:15px;font-weight:600;color:#15324e">账号管理</div>';
-  html += '<button class="btn-query" onclick="openUaModal(-1)">+ 新增用户</button></div>';
-  html += '<table><thead><tr><th style="width:150px">用户名</th><th style="width:110px">登录密码</th>'
+  if (isAdmin) html += '<button class="btn-query" onclick="openUaModal(-1)">+ 新增用户</button>';
+  else html += '<span style="font-size:12px;color:#6b7280;border:1px solid #dfe6e9;border-radius:10px;padding:3px 10px">当前角色：子管理员（可调普通用户的表单权限）</span>';
+  html += '</div>';
+  html += '<table><thead><tr><th style="width:150px">用户名</th><th style="width:90px">角色</th><th style="width:110px">登录密码</th>'
         + '<th>可访问 Tab</th><th style="width:150px">操作</th></tr></thead><tbody>';
   uaRows.forEach((r, i) => {
     const pw = r.has_password
@@ -2544,28 +2689,42 @@ function renderUsersAccount() {
       chips = r.tabs.map(t => '<span class="chip">' + esc(uaTabTitle(t)) + '</span>').join('');
     }
     if (!r.is_admin && r.export) {
-      chips = '<span class="chip active">可导出</span>' + chips;   // 2026-11-20：导出权限标记
+      chips = '<span class="chip active">可导出</span>' + chips;
     }
+    const roleTag = r.role === 'subadmin'
+      ? '<span style="color:#0984e3;font-weight:600">子管理员</span>'
+      : (r.is_admin ? '<span style="color:#d63031;font-weight:600">管理员</span>' : '<span style="color:#636e72">普通用户</span>');
     html += '<tr><td class="col-text" style="font-weight:600">' + esc(r.user)
           + (r.is_admin ? ' <span style="color:#d63031;font-weight:400">(内置)</span>' : '') + '</td>';
-    html += '<td>' + pw + '</td><td class="col-wrap">' + chips + '</td><td>';
-    html += '<button class="btn-query" onclick="openUaModal(' + i + ')">'
-          + (r.is_admin ? '改密码' : '编辑') + '</button> ';
-    if (!r.is_admin) {
-      html += '<button class="btn-save" style="background:#d63031" onclick="deleteUaUser(' + i + ')">删除</button>';
+    html += '<td>' + roleTag + '</td><td>' + pw + '</td><td class="col-wrap">' + chips + '</td><td>';
+    if (r.editable) {
+      html += '<button class="btn-query" onclick="openUaModal(' + i + ')">编辑</button>';
+      if (isAdmin) {
+        html += ' <button class="btn-save" style="background:#d63031" onclick="deleteUaUser(' + i + ')">删除</button>';
+      }
+    } else if (r.is_admin && isAdmin) {
+      html += '<button class="btn-query" onclick="openUaModal(' + i + ')">改密码</button>';
+    } else {
+      html += '<span style="color:#b2bec3;font-size:12px">只读</span>';
     }
     html += '</td></tr>';
   });
   html += '</tbody></table>';
   html += '<div style="padding:14px 2px;color:#6b7280;font-size:12px;line-height:1.9">'
-        + '说明：新增用户会同时写入登录账号与 Tab 权限，保存后即可用该用户名登录。'
-        + 'admin 为内置管理员，固定拥有全部权限，只能改密码。</div>';
+        + (isAdmin
+            ? '说明：新增用户会同时写入登录账号与 Tab 权限；admin 为内置管理员，固定拥有全部权限，只能改密码。可将普通用户设为子管理员。'
+            : '说明：你是子管理员，只能调整普通用户可以访问的表单（限于你自己拥有的范围），不能新增/删除用户、不能改密码、不能调整管理员或其他子管理员。')
+        + '</div>';
   tc.innerHTML = html;
 }
 
 function openUaModal(idx) {
   const isEdit = idx >= 0;
   const row = isEdit ? uaRows[idx] : null;
+  const amAdmin = (uaMe.role === 'admin');
+  if (isEdit && !row.editable && !(row.is_admin && amAdmin)) {
+    alert('该账号只读，不能编辑'); return;
+  }
   uaEditing = isEdit ? row.user : null;
   const selected = isEdit ? (row.tabs || []) : [];
 
@@ -2574,22 +2733,55 @@ function openUaModal(idx) {
   html += '<div class="form-group" style="margin-bottom:12px"><label>用户名</label>'
         + '<input type="text" id="ua_user" value="' + esc(isEdit ? row.user : '')
         + '" placeholder="字母/数字/下划线，如 zhangsan"' + (isEdit ? ' readonly' : '') + '></div>';
+  // 密码框：只有 admin 能看到（子管理员禁止改密码，后端也会拦）
+  if (amAdmin) {
   html += '<div class="form-group" style="margin-bottom:6px"><label>'
         + (isEdit ? '重置密码（留空表示不修改）' : '登录密码') + '</label>'
         + '<input type="password" id="ua_pw" placeholder="' + (isEdit ? '留空=不改' : '至少 6 位')
         + '" autocomplete="new-password"></div>';
+  }
+  // 角色选择：仅 admin 编辑非内置管理员时可见（2026-11-23）
+  if (amAdmin && isEdit && !row.is_admin) {
+    const curRole = (row.role === 'subadmin') ? 'subadmin' : 'user';
+    html += '<div class="form-group" style="margin-bottom:6px"><label>角色</label>'
+          + '<select id="ua_role">'
+          + '<option value="user"' + (curRole === 'user' ? ' selected' : '') + '>普通用户</option>'
+          + '<option value="subadmin"' + (curRole === 'subadmin' ? ' selected' : '') + '>子管理员（可调普通用户的表单权限）</option>'
+          + '</select></div>';
+  }
+  if (uaMe.role === 'subadmin') {
+    html += '<div style="margin-top:6px;color:#6b7280;font-size:12px">提示：若该用户原本还有其他表单权限，且不在你可见范围内，保存时会原样保留，不会因此丢失。</div>';
+  }
 
   if (!(isEdit && row.is_admin)) {
     html += '<div class="form-group" style="margin-top:12px"><label>可访问 Tab</label>'
-          + '<div style="display:flex;gap:8px;margin:4px 0 8px">'
-          + '<button type="button" class="chip" onclick="uaToggleAll(1)">全选</button>'
-          + '<button type="button" class="chip" onclick="uaToggleAll(0)">清空</button></div>'
-          + '<div id="ua_chips" style="display:flex;flex-wrap:wrap;gap:6px;max-height:280px;overflow:auto">';
-    uaTabsMeta.forEach(t => {
-      const on = selected.indexOf(t.key) >= 0;
-      html += '<button type="button" class="chip' + (on ? ' active' : '')
-            + '" data-key="' + esc(t.key) + '" onclick="this.classList.toggle(\'active\')">'
-            + esc(t.title) + '</button>';
+          + '<div style="display:flex;gap:8px;margin:4px 0 8px;flex-wrap:wrap">'
+          + '<button type="button" class="chip" onclick="uaToggleAll(1)">全部全选</button>'
+          + '<button type="button" class="chip" onclick="uaToggleAll(0)">全部清空</button>'
+          + '<span style="font-size:12px;color:#95a5a6;align-self:center">组头勾选 = 整组；单个标签 = 单选</span></div>'
+          + '<div id="ua_chips" style="max-height:360px;overflow:auto;border:1px solid #eef2f5;border-radius:8px;padding:4px 10px 10px">';
+    // 2026-11-23 hunter 要求：按侧边栏分组展示（组全选 + 组内单选）
+    const byGrp = {};
+    uaTabsMeta.forEach(t => { const g = groupOf(t.key); (byGrp[g] = byGrp[g] || []).push(t); });
+    GROUP_ORDER.forEach(g => {
+      const list = byGrp[g];
+      if (!list || !list.length) return;
+      const gid = 'g_' + g;
+      html += '<div class="ua-grp" data-grp="' + gid + '" style="padding:6px 0;border-bottom:1px dashed #eef2f5">';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin:8px 0 8px">'
+            + '<input type="checkbox" class="ua-grp-cb" style="min-width:auto;width:16px;height:16px;cursor:pointer"'
+            + ' onchange="uaToggleGroup(\'' + gid + '\', this.checked)">'
+            + '<span style="font-weight:600;font-size:13px;color:#15324e">' + esc(g) + '</span>'
+            + '<span class="ua-grp-cnt" style="font-size:12px;color:#95a5a6"></span></div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+      list.forEach(t => {
+        const on = selected.indexOf(t.key) >= 0;
+        html += '<button type="button" class="chip' + (on ? ' active' : '') + '"'
+              + ' data-key="' + esc(t.key) + '"'
+              + ' onclick="this.classList.toggle(\'active\'); uaSyncGroupBoxes()">'
+              + esc(t.title) + '</button>';
+      });
+      html += '</div></div>';
     });
     html += '</div></div>';
     // 2026-11-20：导出权限开关（方案A 单一开关）
@@ -2612,10 +2804,34 @@ function openUaModal(idx) {
   box.innerHTML = '<div style="background:#fff;border-radius:10px;padding:20px;width:560px;max-width:100%;max-height:88vh;overflow:auto">' + html + '</div>';
   box.onclick = e => { if (e.target === box) closeUaModal(); };
   document.body.appendChild(box);
+  uaSyncGroupBoxes();   // 初始化组头勾选态与计数（2026-11-23）
 }
 
 function uaToggleAll(on) {
   document.querySelectorAll('#ua_chips .chip').forEach(b => b.classList.toggle('active', !!on));
+  uaSyncGroupBoxes();
+}
+
+// 整组全选/反选（2026-11-23）
+function uaToggleGroup(gid, on) {
+  document.querySelectorAll('#ua_chips .ua-grp[data-grp="' + gid + '"] .chip')
+    .forEach(b => b.classList.toggle('active', !!on));
+  uaSyncGroupBoxes();
+}
+
+// 组头复选框随组内选择自动同步（全选=勾 / 部分=半选 / 未选=空），并显示计数
+function uaSyncGroupBoxes() {
+  document.querySelectorAll('#ua_chips .ua-grp').forEach(box => {
+    const chips = Array.from(box.querySelectorAll('.chip'));
+    const on = chips.filter(c => c.classList.contains('active')).length;
+    const cb = box.querySelector('.ua-grp-cb');
+    const cnt = box.querySelector('.ua-grp-cnt');
+    if (cb) {
+      cb.checked = chips.length > 0 && on === chips.length;
+      cb.indeterminate = on > 0 && on < chips.length;
+    }
+    if (cnt) cnt.textContent = '已选 ' + on + '/' + chips.length;
+  });
 }
 
 function closeUaModal() {
@@ -2626,10 +2842,11 @@ function closeUaModal() {
 async function saveUaUser() {
   const nameInp = document.getElementById('ua_user');
   const pwInp = document.getElementById('ua_pw');
+  const roleInp = document.getElementById('ua_role');
   const msg = document.getElementById('ua_msg');
   const btn = document.getElementById('ua_submit');
   const name = (nameInp.value || '').trim();
-  const password = (pwInp.value || '');
+  const password = pwInp ? (pwInp.value || '') : '';
   const tabs = Array.from(document.querySelectorAll('#ua_chips .chip.active')).map(b => b.dataset.key);
   const _expEl = document.getElementById('ua_export');
   const exportOn = !!(_expEl && _expEl.checked);   // 2026-11-20：导出权限
@@ -2638,9 +2855,11 @@ async function saveUaUser() {
   if (!name) { msg.textContent = '用户名不能为空'; return; }
   btn.disabled = true; btn.textContent = '保存中...';
   try {
+    const payload = {user: name, tabs: tabs, password: password, export: exportOn};
+    if (roleInp) payload.role = roleInp.value;    // 仅 admin 的编辑弹窗会带这个字段
     const d = await uaFetchJson('/shb/api/users-account', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({user: name, tabs: tabs, password: password, export: exportOn})
+      body: JSON.stringify(payload)
     });
     if (!d.ok) { msg.textContent = d.error || '保存失败'; btn.disabled = false; btn.textContent = '保存'; return; }
     closeUaModal();
