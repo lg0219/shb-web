@@ -517,7 +517,9 @@ const DEBUG_ITEM_FULL = {
   '14.循环测试': '加液机打循环测试',
   '15.转向测试': '潜液泵转向测试'
 };
-const TAB_NOTES = {'ol:task-query': TASK_QUERY_NOTE, 'ol:issue-tasks': ISSUE_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:predebug-progress': PREDEBUG_NOTE, 'ol:predebug-progress2': PREDEBUG2_NOTE, 'ol:debug-summary': DEBUG_SUMMARY_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:maint-progress2': MAINT2_NOTE, 'ol:accept-progress2': ACCEPT2_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
+// 周计划（在线）说明（2026-11-24 新增）
+const WEEKLY_NOTE = '说明：数据源为在线工单；只要本周与工单时间段有交集就显示（往前查 365 天，避免老单本周才排计划被漏掉）；人员按「负责人 + 协同人」拆分，一人一行；「周计划」按计划开始/完成时间落格，「周总结」按实际开始/完成时间落格；状态只统计已接受、进行中的单，已排除：待指派、已指派、工单池、已完成、已拒绝、已结算、已关闭、已取消。';
+const TAB_NOTES = {'ol:weekly-plan': WEEKLY_NOTE, 'ol:task-query': TASK_QUERY_NOTE, 'ol:issue-tasks': ISSUE_NOTE, 'ol:progress2': PROGRESS2_NOTE, 'ol:predebug-progress': PREDEBUG_NOTE, 'ol:predebug-progress2': PREDEBUG2_NOTE, 'ol:debug-summary': DEBUG_SUMMARY_NOTE, 'ol:debug-progress': DEBUG_NOTE, 'ol:maintain-progress': MAINT_NOTE, 'ol:accept-progress': ACCEPT_NOTE, 'ol:maint-progress2': MAINT2_NOTE, 'ol:accept-progress2': ACCEPT2_NOTE, 'ol:workload': WORKLOAD_NOTE, 'workload': WORKLOAD_NOTE, 'ol:audit-check': AUDIT_NOTE};
 function isOnlineTab(t) { return ONLINE_TABS_LIST.indexOf(t) >= 0; }
 const ONLINE_FORMS = {
   'ol:trip': [

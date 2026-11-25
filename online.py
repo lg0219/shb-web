@@ -741,6 +741,14 @@ def q_trip(params, progress, deadline):
 
 
 # ── 报表 2：周计划 / 周总结（在线）────────────────────────────────────
+# 2026-11-24 hunter 定：周计划只统计「已接单且未结束」的单。
+# 排除 = 接单前的 待指派(created)/已指派未接单(allocated)/工单池(taskPool)
+#      + 已结束的 已完成(finished)/已拒绝(refused)/已结算(costed)/已关闭(closed)/已取消(offed)
+# 保留 = 已接受(accepted)/进行中(processing)；其余未知状态不列入，出现时按未排除处理（宁可多显示不漏单）
+WEEKLY_EXCLUDE_STATES = {"created", "allocated", "taskPool",
+                         "finished", "refused", "costed", "closed", "offed"}
+
+
 def _task_persons(t, init):
     """工单的归属人 = 负责人 + 协同人（hunter 2026-11-10 定）
 
@@ -781,7 +789,7 @@ def q_weekly(params, progress, deadline):
     week_end_ts = days[-1].replace(hour=23, minute=59, second=59)
     pre = []
     for t in tasks:
-        if (t.get("state") or "") in ("offed",):
+        if (t.get("state") or "") in WEEKLY_EXCLUDE_STATES:
             continue
         if mode == "summary":
             st, en = ts_any(t.get("startTime")), ts_any(t.get("completeTime"))
@@ -794,7 +802,8 @@ def q_weekly(params, progress, deadline):
         pre.append(t)
     details = map_details(pre, deadline=deadline, progress=progress) if pre else {}
 
-    out = weekly_core.build_weekly(tasks, details, monday, days, mode=mode, keyword=keyword)
+    out = weekly_core.build_weekly(tasks, details, monday, days, mode=mode, keyword=keyword,
+                                   exclude_states=WEEKLY_EXCLUDE_STATES)
 
     return {"ok": True, "tab": "ol:weekly-plan", "title": TAB_TITLES["ol:weekly-plan"],
             "mode": mode, "rows": out["rows"], "columns": out["columns"],

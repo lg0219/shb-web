@@ -79,14 +79,22 @@ def week_days(week_start=""):
     return monday, [monday + timedelta(days=i) for i in range(7)]
 
 
-def build_weekly(tasks, details, monday, days, mode="plan", keyword=""):
-    """产出周计划/周总结的行、列、人员清单（与在线版完全同算法）"""
+def build_weekly(tasks, details, monday, days, mode="plan", keyword="",
+                 exclude_states=None):
+    """产出周计划/周总结的行、列、人员清单（与在线版完全同算法）
+
+    2026-11-24 hunter 定：在线周计划要排除「接单前 + 已结束」的状态，
+    故新增 exclude_states 参数由调用方传入；不传则维持原口径（只排除已取消），
+    本地报表行为不变。
+    """
     week_end_ts = days[-1].replace(hour=23, minute=59, second=59)
     keyword = (keyword or "").strip()
+    # 状态排除集合：调用方指定优先，否则沿用旧口径（仅已取消）
+    skip_states = set(exclude_states) if exclude_states else set(_CANCELED)
 
     pre = []
     for t in tasks:
-        if (t.get("state") or "") in _CANCELED:
+        if (t.get("state") or "") in skip_states:
             continue
         if mode == "summary":
             st, en = ts_any(t.get("startTime")), ts_any(t.get("completeTime"))
