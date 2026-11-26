@@ -1233,7 +1233,7 @@ DEBUG_SUMMARY_ITEMS = [
     ("潜液泵转向测试", "15.转向测试"),
 ]
 DEBUG_ITEM_COLS = [s for _f, s in DEBUG_SUMMARY_ITEMS]
-DEBUG_SUMMARY_COLUMNS = ["序号", "项目编码", "客户名称", "调试人员"] + DEBUG_ITEM_COLS + ["调试日期"]
+DEBUG_SUMMARY_COLUMNS = ["序号", "项目编码", "客户名称", "调试人员", "完成情况"] + DEBUG_ITEM_COLS + ["调试日期"]
 DEBUG_ITEM_ORDER = {s: i for i, (_f, s) in enumerate(DEBUG_SUMMARY_ITEMS)}
 
 
@@ -1268,8 +1268,15 @@ def q_debug_summary(params, progress, deadline):
                "客户名称": rs[0].get("客户名称") or "",
                "调试人员": "、".join(persons),
                "调试日期": _maxday(rs)}
+        hit = 0
         for col, (full, _short) in zip(DEBUG_ITEM_COLS, DEBUG_SUMMARY_ITEMS):
-            row[col] = "✓" if full in done else ""
+            if full in done:
+                row[col] = "✓"
+                hit += 1
+            else:
+                row[col] = ""
+        # 2026-11-26 hunter 新增：完成情况 = 该项目打勾项数 / 调试项总数（当前 15 项）
+        row["完成情况"] = "%d/%d" % (hit, len(DEBUG_SUMMARY_ITEMS))
         out.append(row)
 
     out.sort(key=lambda r: (r["项目编码"] or "", r["客户名称"] or ""))

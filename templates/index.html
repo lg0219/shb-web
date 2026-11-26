@@ -277,7 +277,7 @@ if (userTabs && userTabs.length) currentTab = (userTabs.indexOf('bk_overview') >
 
 // ── 侧边栏菜单（分组）──
 const AUDIT_KEY = '__audit__';
-const GROUP_ORDER = ['概览', '工单在线查询', '工单备份', '客户备份', '在线报表', '本地报表', '系统'];
+const GROUP_ORDER = ['概览', '工单在线查询', '在线报表', '本地报表', '工单备份', '客户备份', '系统'];
 // 分组标题图标（只加在分组上，Tab 项不加）
 const _svgIco = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
 const GROUP_ICONS = {
@@ -452,7 +452,7 @@ const ONLINE_TABS_LIST = ['ol:trip', 'ol:weekly-plan', 'ol:progress2', 'ol:workl
 // 项目进度（在线）查询口径说明（显示在页面标题右侧，红色小字）
 const PROGRESS2_NOTE = '说明：关键字按客户编号或客户名称模糊匹配，不限时间；日期筛选客户档案的最后更新日期，留空表示不限；默认隐藏已填保运完毕日期的客户，勾选「显示已完成」才显示。';
 // 调试进度（在线）说明
-const DEBUG_NOTE = '说明：默认查询当月；查历史请输入项目编号或客户名称；调试内容为空时不显示；按关键字查询时不限时间。';
+const DEBUG_NOTE = '说明：按【调试内容】分行，多人时同一条内容显示多行，包含协同人；默认查询当月；查历史请输入项目编号或客户名称；调试内容为空时不显示；按关键字查询时不限时间。';
 // 保运进度（在线）说明
 const MAINT_NOTE = '说明：关键字按项目编号、项目名称、工单号模糊匹配，有填关键字时不限时间；日期按工单开始时间筛选，默认当月；同一项目（客户）有多单时取创建日期最近的一单；\n服务内容取该单已提交与暂存数据的合并值。';
 // 需要显示标题右侧说明的 Tab
@@ -484,7 +484,7 @@ const PREDEBUG2_NOTE = '说明：预调试长表 —— 一行 = 一个人 × �
 const MAINT2_NOTE = '说明：保运长表 —— 一行 = 一个人 × 一个有记录的服务项（无记录的不出行）；人员 = 负责人 + 协同人（有协同人则每人一行，没有就只显示负责人）；日期按工单开始时间筛选，默认当月；有填关键字时不限时间。';
 const ACCEPT2_NOTE = '说明：验收进度按人拆分 —— 负责人、协同人各占一行，内容相同；日期按工单开始时间筛选，默认当月；有填关键字时不限时间。';
 // 调试进度（在线）汇总说明（2026-11-20 新增）
-const DEBUG_SUMMARY_NOTE = '说明：一个项目一行（同项目多单取调试日期最新的一单）；调试内容按「数字.简称」列显示，做过的打勾；关键字可按项目编码/客户名称/调试人员查，不限时间。';
+const DEBUG_SUMMARY_NOTE = '说明：默认查30天内创建且在本周内调试内容有更新的项目；一个项目一行（同项目多单取调试日期最新的一单）；调试内容按「数字.简称」列显示，做过的打勾；关键字可按项目编码/客户名称/调试人员查，不限时间。';
 // 调试内容：列名 → 全称（表头 ? 气泡）
 // 保运 11 项：列名 → 全称（2026-11-20 hunter 定：鼠标悬停表头显示全称，不加 ? 气泡）
 const MAINT_ITEM_FULL = {
@@ -554,13 +554,13 @@ const ONLINE_FORMS = {
   ],
   'ol:debug-summary': [
     {id:'olds_kw', label:'关键字', ph:'项目编码/客户名称/调试人员（可空）', param:'keyword'},
-    {id:'olds_begin', label:'日期从', type:'date', param:'date_begin', tip:'实际调试完成日期'},
-    {id:'olds_end', label:'日期至', type:'date', param:'date_end', tip:'实际调试完成日期'}
+    {id:'olds_begin', label:'日期从', type:'date', param:'date_begin', tip:'调试人员填在调试项上的日期'},
+    {id:'olds_end', label:'日期至', type:'date', param:'date_end', tip:'调试人员填在调试项上的日期'}
   ],
   'ol:debug-progress': [
     {id:'oldebug_kw', label:'关键字', ph:'工单编号/客户（可空）', param:'keyword'},
-    {id:'oldebug_begin', label:'日期从', type:'date', param:'date_begin', tip:'实际调试完成日期'},
-    {id:'oldebug_end', label:'日期至', type:'date', param:'date_end', tip:'实际调试完成日期'}
+    {id:'oldebug_begin', label:'日期从', type:'date', param:'date_begin', tip:'调试人员填在调试项上的日期'},
+    {id:'oldebug_end', label:'日期至', type:'date', param:'date_end', tip:'调试人员填在调试项上的日期'}
   ],
   'ol:maintain-progress': [
     {id:'olm_kw', label:'关键字', ph:'项目编号/项目名称/工单号', param:'keyword'},
@@ -756,6 +756,7 @@ function buildResultForm(tab) {
     _set('ola_begin', _isoDate(_m1)); _set('ola_end', _isoDate(_m2));
     _set('olaud_begin', _isoDate(_now)); _set('olaud_end', _isoDate(_now));
     _set('olp2_begin', _isoDate(_m1)); _set('olp2_end', _isoDate(_m2));
+    _set('olds_begin', _isoDate(_mon)); _set('olds_end', _isoDate(_sun));   // 2026-11-26：调试进度（在线）默认本周（周一~周日）
     // 问题工单：默认本周（周一→今天，2026-11-13 hunter 定）
     _set('olit_begin', _isoDate(_mon)); _set('olit_end', _isoDate(_now));
     _set('olw_week', _isoDate(_now));
